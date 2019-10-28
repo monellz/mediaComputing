@@ -1,0 +1,187 @@
+use crate::utils::{RgbMatrix, WinRefMatrix, Matrix, ItemMap, WIN_LEN};
+
+use sprs::TriMat;
+
+use image::{ImageBuffer, Rgb};
+
+
+pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f32) {
+    let win_size = WIN_LEN * WIN_LEN;
+    let pix_num = rgb_mat.ncol() * rgb_mat.nrow();
+    
+    let lambda = 100.0;
+
+    let mut constrain_map = Matrix::new(rgb_mat.nrow(), rgb_mat.ncol());
+
+    let img_nrow = rgb_mat.nrow();
+    let img_ncol = rgb_mat.ncol();
+
+    let diff = s_rgb_mat.clone() - rgb_mat.clone();
+
+    //display_rgb(&diff, "diff.png");
+
+
+    for i in 0..img_nrow {
+        for j in 0..img_ncol {
+            if diff[(i, j)].dot(diff[(i, j)]) <= 1e-6 {
+                constrain_map[(i, j)] = 0.0; 
+            } else {
+                constrain_map[(i, j)] = 1.0;
+            }
+        }
+    }
+
+    //display_gray(&constrain_map, "constrrain_map.png");
+
+    let D_s = (constrain_map.clone() * lambda).into_vec();
+
+
+    let laplacian_mat = calculate_laplacian(&rgb_mat, eps, &D_s);
+
+
+
+
+    let mut prior = Matrix::new(img_nrow, img_ncol);
+    for i in 0..img_nrow {
+        for j in 0..img_ncol {
+            let mut sum = diff[(i, j)][0] + diff[(i, j)][1] + diff[(i, j)][2];
+
+            if sum > 0.001 {
+                sum = 1.0;
+            } else if sum < -0.001 {
+                sum = -1.0; 
+            }
+
+            prior[(i, j)] = sum / 2.0 + 0.5;
+        }
+    }
+
+    //display_gray(&prior, "prior.png");
+
+
+    let prior = prior.into_vec();
+
+    let prior_conf = D_s.clone();
+
+    let mut rhs = Vec::<f32>::with_capacity(prior.capacity());
+    prior.iter().enumerate().for_each(|(i, x)| rhs.push(x * prior_conf[i]));
+    assert_eq!(rhs.len(), prior.len());
+
+    //println!("{:?}", rhs);
+    //panic!();
+    
+    let laplacian_mat = laplacian_mat.to_csc();
+    let _ = sprs::linalg::trisolve::lsolve_csc_dense_rhs(laplacian_mat.view(), &mut rhs);
+
+    rhs.iter_mut().for_each(|x| {
+        if *x > 1.0 {
+            *x = 1.0;
+        } else if *x < 0.0 {
+            *x = 0.0;
+        }
+    });
+
+    let alpha_mat = Matrix::from_vec(rhs.clone(), img_nrow, img_ncol);
+
+    display_gray(&alpha_mat, "alpha_mat.png");
+
+    println!("solve done, ncol = {}, nraw = {}", img_ncol as u32, img_nrow as u32);
+    let mut image = ImageBuffer::<Rgb<u8>, Vec<_>>::new(img_ncol as u32, img_nrow as u32);
+    for i in 0..img_ncol {
+        for j in 0..img_nrow {
+            //let v = i * img_ncol + j;
+            let v = i * img_nrow + j;
+            let vv = (rhs[v] * 255.0) as u8;
+            if vv != 0 {
+                println!("i = {}, j = {} value = {}", i, j, vv);
+            }
+            *image.get_pixel_mut(i as u32, j as u32) = image::Rgb([vv, vv, vv]);
+        }
+    }
+
+    image.save("out.png").unwrap();
+}
+
+
+pub fn calculate_laplacian(rgb_mat: &RgbMatrix, eps: f32, diag: &Vec<f32>) -> TriMat<f32> {
+    let win_size = WIN_LEN * WIN_LEN;
+    let win_row_count = rgb_mat.nrow() - WIN_LEN + 1;
+    let win_col_count = rgb_mat.ncol() - WIN_LEN + 1;
+
+    
+    let mut win_mat = WinRefMatrix::from_rgb_matrix(&rgb_mat, win_row_count, win_col_count);
+    
+    //iterate over the windows and calculate the mean and covariance
+    win_mat.cal_all_distribution();
+    println!("distribution done");
+
+    win_mat.cal_all_inner_mat(eps);
+    println!("inner mat done");
+
+
+    let mut map = ItemMap::new();
+
+    win_mat.cal_all_reduce(&mut map);
+    println!("all reduce done");
+
+    let mut data = Vec::<f32>::with_capacity(map.capacity());
+    let mut rows = Vec::<usize>::with_capacity(map.capacity());
+    let mut cols = Vec::<usize>::with_capacity(map.capacity());
+
+    map.iter().for_each(|(&(i, j), &value)| {
+        if i == j {
+            let v = value + diag[i];
+            rows.push(i);
+            cols.push(j);
+            data.push(v);
+        } else {
+            rows.push(i);
+            cols.push(j);
+            data.push(value);
+            
+            rows.push(j);
+            cols.push(i);
+            data.push(value);
+        }
+    });
+
+    println!("vec len: {}", data.len());
+
+    let pix_num = rgb_mat.ncol() * rgb_mat.nrow();
+
+    TriMat::from_triplets((pix_num, pix_num), rows, cols, data)
+}
+
+
+
+fn display_rgb(rgb_mat: &RgbMatrix, fname: &str) {
+
+    println!("save, ncol = {}, nraw = {}", rgb_mat.ncol(), rgb_mat.nrow());
+    let mut image = ImageBuffer::<Rgb<u8>, Vec<_>>::new(rgb_mat.ncol() as u32, rgb_mat.nrow() as u32);
+    for i in 0..rgb_mat.ncol() {
+        for j in 0..rgb_mat.nrow() {
+            //let v = i * img_ncol + j;
+            let res = (rgb_mat[(j, i)] * 255.0).into_raw();
+            *image.get_pixel_mut(i as u32, j as u32) = image::Rgb([res[0] as u8, res[1] as u8, res[2] as u8]);
+        }
+    }
+
+    image.save(fname).unwrap();
+    panic!();
+}
+
+fn display_gray(mat: &Matrix, fname: &str) {
+    println!("save, ncol = {}, nraw = {}", mat.ncol(), mat.nrow());
+    let mut image = ImageBuffer::<Rgb<u8>, Vec<_>>::new(mat.ncol() as u32, mat.nrow() as u32);
+    for i in 0..mat.ncol() {
+        for j in 0..mat.nrow() {
+            //let v = i * img_ncol + j;
+            let v = (mat[(j, i)] * 255.0) as u8;
+            *image.get_pixel_mut(i as u32, j as u32) = image::Rgb([v, v, v]);
+        }
+    }
+
+    image.save(fname).unwrap();
+    panic!();
+
+}

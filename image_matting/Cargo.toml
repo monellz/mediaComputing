@@ -1,5 +1,5 @@
 [package]
-name = "imageMatting"
+name = "image_matting"
 version = "0.1.0"
 authors = ["monell <monell.zhong@gmail.com>"]
 edition = "2018"
@@ -7,5 +7,9 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-nalgebra = "0.18"
+clap = "2.33.0"
 image = "*"
+sprs = "0.6.5"
+sprs-ldl = "0.4.1"
+nalgebra = { version = "0.18.0", features = ["sparse"] }
+
