@@ -1,8 +1,4 @@
-#[macro_escape]
-
 pub type Matrix = DMatrix<f64>;
-
-
 #[derive(Debug, Clone)]
 pub struct DMatrix<T> {
     pub elem: Vec<T>,
@@ -360,29 +356,199 @@ matrix_double_idx!{M33, f64, 3, 3}
 matrix_reduce_op!{V3, f64, 0.0}
 
 
+pub mod sparse {
+    use super::*;
+    pub type SpMatrix = CSRMatrix<f64>;
+    pub struct CSRMatrix<T> {
+        vals: Vec<T>,
+        cols: Vec<usize>,
+        row_offset: Vec<usize>,
+    }
+    impl<T> CSRMatrix<T>
+        where T: std::marker::Copy + std::ops::AddAssign  {
+        pub fn new(d: Vec<T>, r: Vec<usize>, c: Vec<usize>) -> CSRMatrix<T> {
+            let mut rc: Vec<(usize, usize, T)> = Vec::with_capacity(d.len());
+            assert_eq!(d.len(), r.len());
+            assert_eq!(r.len(), c.len());
+
+            for i in 0..d.len() {
+                rc.push((r[i], c[i], d[i]));
+            }
+            rc.sort_by_key(|i| (i.0, i.1));
+
+            let mut vals: Vec<T> = Vec::with_capacity(d.len() / 4 + 1);
+            let mut cols: Vec<usize> = Vec::with_capacity(d.len() / 4 + 1);
+            let mut row_offset: Vec<usize> = Vec::with_capacity(d.len() / 4 + 1);
+
+            let mut row_cur_num = rc[0].0;            
+            let mut offset_num = 0;
+            let mut col_cur_num = rc[0].1;
+            vals.push(rc[0].2);
+            cols.push(rc[0].1);
+            row_offset.push(0);
+
+            for i in 1..rc.len() {
+                if row_cur_num == rc[i].0 && col_cur_num == rc[i].1 {
+                    vals[offset_num] += rc[i].2;
+                } else {
+                    if row_cur_num < rc[i].0 {
+                        row_offset.push(offset_num + 1);
+                    }
+                    
+                    vals.push(rc[i].2);
+                    cols.push(rc[i].1);
+                    
+                    offset_num += 1;
+                    row_cur_num = rc[i].0;
+                    col_cur_num = rc[i].1;
+                }
+            }
+            row_offset.push(offset_num + 1);
+
+            CSRMatrix {
+                vals,
+                cols,
+                row_offset,
+            }
+        }
+
+        pub fn get_vals_ref(&self) -> &Vec<T> {
+            &self.vals
+        }
+
+        pub fn get_row_offset_ref(&self) -> &Vec<usize> {
+            &self.row_offset
+        }
+
+        pub fn get_cols_ref(&self) -> &Vec<usize> {
+            &self.cols
+        }
+    }
+
+    impl<T: std::fmt::Debug> std::fmt::Debug for CSRMatrix<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "----CSR matrix----\n").unwrap();
+            /*
+            let mut rec = 0;
+            let mat_len = self.row_offset.len() - 1;
+            for r in 0..mat_len {
+                for c in 0..mat_len {
+                    if self.cols[rec] < c {
+                        write!(f, "0 ").unwrap();
+                    } else if self.cols[rec] == c {
+                        write!(f, "{:?} ", self.vals[rec]).unwrap();
+                        rec += 1;
+                    }
+                }
+                write!(f, "\n").unwrap();
+            }
+            */
+            println!("{:?}", self.vals);
+            println!("{:?}", self.cols);
+            println!("{:?}", self.row_offset);
+
+            write!(f, "----CSR matrix---over---\n")
+        }
+    }
+
+
+    impl<T> CSRMatrix<T>
+        where T: std::marker::Copy 
+        + core::default::Default
+        + std::ops::AddAssign
+        + std::ops::Mul<Output = T> {
+        pub fn mult_vec(&self, rhs: Vec<T>) -> Vec<T> {
+            assert_eq!(rhs.len(), self.row_offset.len() - 1);
+
+            let mut res: Vec<T> = vec![T::default(); rhs.len()];
+            let mat_len = self.row_offset.len() - 1;
+            for i in 0..mat_len {
+                for j in self.row_offset[i]..self.row_offset[i + 1] {
+                    res[i] += self.vals[j] * rhs[self.cols[j]];
+                } 
+            }
+            res
+        }
+
+        pub fn solve_cg(&self, rhs: &mut Vec<T>) -> Vec<T> {
+            //solve A x = b
+
+            unimplemented!()
+        }
+    }
+}
+
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::sparse::*;
     #[test]
     fn quadratic() {
         let a = [2.0, 4.0, 5.0];
         let b = [2.5, 1.0, 3.0];
-        let M = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        let mat = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
 
         let a = V3::from_raw(a);
         let b = V3::from_raw(b);
-        let M = M33::from_raw(M);
+        let mat = M33::from_raw(mat);
 
         println!("{:?}",a);
         println!("{:?}",b);
-        println!("{:?}",M);
+        println!("{:?}",mat);
 
-        let rhs = M.dot(&b);
+        let rhs = mat.dot(&b);
         let ans = [13.5, 33.0,52.5];
         let right_answer = V3::from_raw(ans);
         assert_eq!(right_answer, rhs);
 
-        let res = M.quadratic(&a, &b);
+        let res = mat.quadratic(&a, &b);
         assert_eq!(res, 421.5);
+    }
+
+    #[test]
+    fn sparse_mat_print() {
+        let data = vec![1.0, 2.0, 3.0, 4.0];
+        let rows = vec![0, 1, 2, 3];
+        let cols = vec![0, 1, 2, 3];
+
+        let mat = CSRMatrix::new(data, rows, cols);
+        assert_eq!(mat.get_vals_ref(), &[1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(mat.get_cols_ref(), &[0, 1, 2, 3]);
+        assert_eq!(mat.get_row_offset_ref(), &[0, 1, 2, 3, 4]);
+        println!("{:?}", mat);
+
+        let data = vec![1.0, 7.0, 2.0, 8.0, 5.0, 3.0, 9.0, 6.0, 4.0];
+        let rows = vec![0, 0, 1, 1, 2, 2, 2, 3, 3];
+        let cols = vec![0, 1, 1, 2, 0, 2, 3, 1, 3];
+        let mat = CSRMatrix::new(data, rows, cols);
+        assert_eq!(mat.get_vals_ref(), &[1.0, 7.0, 2.0, 8.0, 5.0, 3.0, 9.0, 6.0, 4.0]);
+        assert_eq!(mat.get_cols_ref(), &[0, 1, 1, 2, 0, 2, 3, 1, 3]);
+        assert_eq!(mat.get_row_offset_ref(), &[0, 2, 4, 7, 9]);
+        println!("{:?}", mat);
+
+        let data = vec![1.0, 7.0, 2.0, 4.0, 5.0, 3.0, 9.0, 6.0, 4.0, 4.0];
+        let rows = vec![0, 0, 1, 1, 2, 2, 2, 3, 3, 1];
+        let cols = vec![0, 1, 1, 2, 0, 2, 3, 1, 3, 2];
+        let mat = CSRMatrix::new(data, rows, cols);
+        assert_eq!(mat.get_vals_ref(), &[1.0, 7.0, 2.0, 8.0, 5.0, 3.0, 9.0, 6.0, 4.0]);
+        assert_eq!(mat.get_cols_ref(), &[0, 1, 1, 2, 0, 2, 3, 1, 3]);
+        assert_eq!(mat.get_row_offset_ref(), &[0, 2, 4, 7, 9]);
+        println!("{:?}", mat);
+    }
+
+    #[test]
+    fn sparse_mat_mult_vec() {
+        let data = vec![1.0, 7.0, 2.0, 4.0, 5.0, 3.0, 9.0, 6.0, 4.0, 4.0];
+        let rows = vec![0, 0, 1, 1, 2, 2, 2, 3, 3, 1];
+        let cols = vec![0, 1, 1, 2, 0, 2, 3, 1, 3, 2];
+        let mat = CSRMatrix::new(data, rows, cols);
+        
+        let rhs = vec![1.0, 2.0, 3.0, 4.0];
+
+        let res = mat.mult_vec(rhs);
+        println!("mult vec = {:?}", res);
+        assert_eq!(res, vec![15.0, 28.0, 50.0, 28.0]);
     }
 }
