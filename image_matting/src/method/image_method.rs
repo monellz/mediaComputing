@@ -10,6 +10,8 @@ use super::*;
 
 use std::io::Write;
 
+use crate::linear::sparse::CSRMatrix;
+
 
 pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f64) {
     let lambda = 100.0;
@@ -43,36 +45,44 @@ pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f64) {
 
     //(L + \lambda D_s) \alpha = \lambda b_s
     let d_s = (constrain_map.clone() * lambda).into_vec();
-    //print
-    let mut f = std::fs::File::create("diag.txt").unwrap();
-    d_s.iter().for_each(|x| {
-        let s = format!("{}\n", x);
-        f.write_all(s.as_bytes()).unwrap();
-    });
 
-    let laplacian_mat = calculate_laplacian(&rgb_mat, eps, d_s);
+
+    let csr_mat = calculate_laplacian_slow(&rgb_mat, eps, d_s);
+    //let laplacian_mat = calculate_laplacian(&rgb_mat, eps, d_s);
 
     //b_s: specific alpha value, one for foreground, zero for background and other pixel
     let mut b_s = Matrix::new(rgb_mat.nrow(), rgb_mat.ncol(), 0.0);
 
+    let mut estimate = Matrix::new(rgb_mat.nrow(), rgb_mat.ncol(), 0.0);
     for i in 0..rgb_mat.nrow() {
         for j in 0..rgb_mat.ncol() {
             let sum = diff[(i, j)].sum();
             if sum > 0.0 {
                 //user-applied foreground alpha = 1
                 b_s[(i, j)] = 1.0 * lambda;
+                estimate[(i, j)] = 1.0;
+            } else if sum == 0.0 {
+                estimate[(i, j)] = 0.5;
             }
         }
     }
 
+    let mut estimate = estimate.into_vec();
     //now solve L \alpha = \lambda b_s
     let mut b_s = b_s.into_vec();
     println!("start solve");
 
-
+    /*
     let ldlt = LdlNumeric::new(laplacian_mat.view()).unwrap();
     let mut alpha = ldlt.solve(&b_s);
+    */
+    //let (mut alpha, mut cur_step) = csr_mat.solve_cg(&b_s, 1e-5, 100000, None);
+    ///let cond_rev = csr_mat.get_jacobi_cond_rev();
+    let cond_rev = csr_mat.get_abs_norm_cond_rev();
+    let (mut alpha, mut cur_step) = csr_mat.solve_cg_preconditioner(&b_s, 1e-6, 100000, None, cond_rev);
 
+
+    println!("cur_step = {}", cur_step);
     println!("solve done");
 
     //nomralize
@@ -86,7 +96,7 @@ pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f64) {
     alpha_mat.save_img("alpha_mat.png");
 }
 
-fn calculate_laplacian_slow(rgb_mat: &RgbMatrix, eps: f64, diag: Vec<f64>) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
+fn calculate_laplacian_slow(rgb_mat: &RgbMatrix, eps: f64, diag: Vec<f64>) -> CSRMatrix<f64> {
     let pix_num = rgb_mat.ncol() * rgb_mat.nrow();
     let win_row_count = rgb_mat.nrow() - WIN_LEN + 1;
     let win_col_count = rgb_mat.ncol() - WIN_LEN + 1;
@@ -112,7 +122,7 @@ fn calculate_laplacian_slow(rgb_mat: &RgbMatrix, eps: f64, diag: Vec<f64>) -> (V
     });
 
 
-    (rows, cols, data)
+    CSRMatrix::new(data, rows, cols)
 }
 
 

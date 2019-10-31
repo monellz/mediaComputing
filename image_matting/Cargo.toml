@@ -1,3 +1,10 @@
+cargo-features = ["profile-overrides"]
+
+
+[profile.dev.overrides."*"]
+opt-level = 3
+
+
 [package]
 name = "image_matting"
 version = "0.1.0"
@@ -12,4 +19,7 @@ image = "*"
 sprs = "0.6.5"
 sprs-ldl = "0.4.1"
 nalgebra = { version = "0.18.0", features = ["sparse"] }
+stopwatch = "0.0.7"
+num-traits = "0.2.8"
+rayon = "1.2.0"
 

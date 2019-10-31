@@ -4,7 +4,7 @@ pub const WIN_LEN: usize = 3;
 pub const WIN_SIZE: usize = WIN_LEN * WIN_LEN;
 
 
-use crate::linear;
+use crate::linear::{self, sparse};
 use linear::{M33, V3};
 use crate::{matrix_able_ops_for_whole, matrix_math_ops_for_single_elem, matrix_double_idx};
 
