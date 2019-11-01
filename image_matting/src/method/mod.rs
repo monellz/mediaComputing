@@ -221,7 +221,6 @@ impl<'a> WinRefMatrix<'a> {
     fn from_rgb_matrix(rgb_mat: &'a RgbMatrix, win_row_count: usize, win_col_count: usize) -> WinRefMatrix<'a> {
         let mut v: Vec<WindowRef<'a>> = Vec::<WindowRef<'a>>::with_capacity(win_row_count * win_col_count);
 
-        let mut f = false;
         for i in 0..win_row_count {
             for j in 0..win_col_count {
                 v.push(WindowRef::<'a>::new(rgb_mat, (i, j)));

@@ -1,5 +1,4 @@
-use sprs::{TriMat, linalg, CsMat};
-use image;
+use sprs::{TriMat, CsMat};
 
 use sprs_ldl::LdlNumeric;
 
@@ -7,8 +6,6 @@ use nalgebra::sparse::{CsMatrix, CsCholesky};
 use nalgebra::sparse;
 
 use super::*;
-
-use std::io::Write;
 
 use crate::linear::sparse::CSRMatrix;
 
@@ -23,7 +20,6 @@ pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f64) {
     let mut prior = Matrix::new(rgb_mat.nrow(), rgb_mat.ncol(), 0.0);
 
     let diff = s_rgb_mat.clone() - rgb_mat.clone();
-    //display
 
     for i in 0..rgb_mat.nrow() {
         for j in 0..rgb_mat.ncol() {
@@ -47,7 +43,7 @@ pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f64) {
     let d_s = (constrain_map.clone() * lambda).into_vec();
 
 
-    let csr_mat = calculate_laplacian_slow(&rgb_mat, eps, d_s);
+    let csr_mat = calculate_laplacian_csr(&rgb_mat, eps, d_s);
     //let laplacian_mat = calculate_laplacian(&rgb_mat, eps, d_s);
 
     //b_s: specific alpha value, one for foreground, zero for background and other pixel
@@ -66,8 +62,9 @@ pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f64) {
             }
         }
     }
+    let estimate = estimate.into_vec();
 
-    let mut estimate = estimate.into_vec();
+
     //now solve L \alpha = \lambda b_s
     let mut b_s = b_s.into_vec();
 
@@ -79,8 +76,8 @@ pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f64) {
     //let cond_rev = csr_mat.get_jacobi_cond_rev();
     //let cond_rev = csr_mat.get_abs_norm_cond_rev();
     let cond_rev = csr_mat.get_euclid_norm_cond_rev();
-    //let (mut alpha, mut cur_step) = csr_mat.solve_pcg(&b_s, 1e-6, 100000, None, cond_rev);
-    let (mut alpha, mut cur_step) = csr_mat.solve_pcg_parallel(&b_s, 1e-6, 4000, None, cond_rev);
+    //let mut alpha = csr_mat.solve_pcg(&b_s, 1e-6, 100000, None, cond_rev);
+    let mut alpha = csr_mat.solve_pcg_parallel(&b_s, 1e-6, 4000, None, cond_rev);
 
 
     //nomralize
@@ -94,7 +91,7 @@ pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f64) {
     alpha_mat.save_img("alpha_mat.png");
 }
 
-fn calculate_laplacian_slow(rgb_mat: &RgbMatrix, eps: f64, diag: Vec<f64>) -> CSRMatrix<f64> {
+fn calculate_laplacian_csr(rgb_mat: &RgbMatrix, eps: f64, diag: Vec<f64>) -> CSRMatrix<f64> {
     let pix_num = rgb_mat.ncol() * rgb_mat.nrow();
     let win_row_count = rgb_mat.nrow() - WIN_LEN + 1;
     let win_col_count = rgb_mat.ncol() - WIN_LEN + 1;
@@ -147,7 +144,7 @@ fn calculate_laplacian(rgb_mat: &RgbMatrix, eps: f64, diag: Vec<f64>) -> CsMat<f
     
 
 
-    let (mut rows, mut cols, mut data) = win_mat.create_tri_inds();
+    let (rows, cols, data) = win_mat.create_tri_inds();
     dbg!(data.len());
     
     let diag_rows: Vec<usize> = (0..diag.len()).collect();
@@ -196,7 +193,7 @@ fn calculate_laplacian(rgb_mat: &RgbMatrix, eps: f64, diag: Vec<f64>) -> CsMat<f
 
 
 fn solve_sparse_system(rows: Vec<usize>, cols: Vec<usize>, data: Vec<f64>, rhs: Vec<f64>) -> Vec<f64> {
-    let mut cs_mat = CsMatrix::from_triplet(rows.len(), cols.len(), &rows[..], &cols[..], &data[..]);
+    let cs_mat = CsMatrix::from_triplet(rows.len(), cols.len(), &rows[..], &cols[..], &data[..]);
     let cholesky = CsCholesky::new(&cs_mat);
     let l = cholesky.l().unwrap();
 
