@@ -79,8 +79,8 @@ pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f64) {
     //let cond_rev = csr_mat.get_jacobi_cond_rev();
     //let cond_rev = csr_mat.get_abs_norm_cond_rev();
     let cond_rev = csr_mat.get_euclid_norm_cond_rev();
-    //let (mut alpha, mut cur_step) = csr_mat.solve_cg_precond(&b_s, 1e-6, 100000, None, cond_rev);
-    let (mut alpha, mut cur_step) = csr_mat.solve_cg_precond_parallel(&b_s, 1e-6, 4000, None, cond_rev);
+    //let (mut alpha, mut cur_step) = csr_mat.solve_pcg(&b_s, 1e-6, 100000, None, cond_rev);
+    let (mut alpha, mut cur_step) = csr_mat.solve_pcg_parallel(&b_s, 1e-6, 4000, None, cond_rev);
 
 
     //nomralize

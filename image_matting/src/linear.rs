@@ -551,7 +551,7 @@ pub mod sparse {
             res
         }
 
-        pub fn solve_cg_precond_parallel(&self, rhs: &Vec<T>, tol: T, max_steps: usize, x: Option<Vec<T>>, cond_rev: CSRMatrix<T>) -> (Vec<T>, usize) {
+        pub fn solve_pcg_parallel(&self, rhs: &Vec<T>, tol: T, max_steps: usize, x: Option<Vec<T>>, cond_rev: CSRMatrix<T>) -> (Vec<T>, usize) {
             //solve A x = b
             let mut x = x.unwrap_or(vec![T::zero(); rhs.len()]);
             let mut cur_step: usize = 0;
@@ -666,7 +666,7 @@ pub mod sparse {
             res
         }
 
-        pub fn solve_cg_precond(&self, rhs: &Vec<T>, tol: T, max_steps: usize, x: Option<Vec<T>>, cond_rev: CSRMatrix<T>) -> (Vec<T>, usize) {
+        pub fn solve_pcg(&self, rhs: &Vec<T>, tol: T, max_steps: usize, x: Option<Vec<T>>, cond_rev: CSRMatrix<T>) -> (Vec<T>, usize) {
              //solve A x = b
             let mut x = x.unwrap_or(vec![T::default(); rhs.len()]);
             let mut cur_step: usize = 0;
