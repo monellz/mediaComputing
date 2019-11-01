@@ -70,7 +70,7 @@ impl RgbMatrix {
     }
 
     fn save_img(&self, fname: &str) {
-        dbg!("save img {}", fname);
+        info!("save img to {}", fname);
 
         let mut image = ImageBuffer::<image::Rgb<u8>, Vec<_>>::new(self.ncol() as u32, self.nrow() as u32);
         for i in 0..self.ncol() {

@@ -5,9 +5,15 @@ mod linear;
 use clap::{Arg, App};
 use image;
 
+#[macro_use]
+extern crate log;
+extern crate simplelog;
+use simplelog::*;
+
 
 
 fn main() {
+    TermLogger::init(LevelFilter::Info, Config::default(), TerminalMode::Mixed).unwrap();
     let matches = App::new("image mattiing")
                     .arg(Arg::with_name("input_original_image")
                         .short("i")
@@ -20,7 +26,7 @@ fn main() {
                         .value_name("SCRIBBLE_IMAGE")
                         .takes_value(true))
                     .get_matches();
-    println!("{:?}", std::env::current_dir().unwrap());
+    info!("current directory: {:?}", std::env::current_dir().unwrap());
     let input_img = matches.value_of("input_original_image").unwrap();
     let s_img = matches.value_of("input_scribble_image").unwrap();
     

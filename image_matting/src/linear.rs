@@ -414,7 +414,7 @@ pub mod basic {
 }
 
 
-
+#[allow(dead_code)]
 pub mod sparse {
     use super::*;
 
@@ -532,6 +532,69 @@ pub mod sparse {
             write!(f, "----CSR matrix---over---\n")
         }
     }
+
+    impl<T> CSRMatrix<T>
+        where T: num_traits::float::Float
+        + std::fmt::Display
+        + std::ops::AddAssign
+        + std::iter::Sum
+        + std::marker::Send
+        + std::marker::Sync {
+        pub fn mult_vec_parallel(&self, rhs: &Vec<T>) -> Vec<T> {
+            assert_eq!(rhs.len(), self.row_offset.len() - 1);
+            let mut res: Vec<T> = vec![T::zero(); rhs.len()];
+            res.par_iter_mut().enumerate().for_each(|(i, x)| {
+                for j in self.row_offset[i]..self.row_offset[i + 1] {
+                    *x += self.vals[j] * rhs[self.cols[j]];
+                }
+            });
+            res
+        }
+
+        pub fn solve_cg_precond_parallel(&self, rhs: &Vec<T>, tol: T, max_steps: usize, x: Option<Vec<T>>, cond_rev: CSRMatrix<T>) -> (Vec<T>, usize) {
+            //solve A x = b
+            let mut x = x.unwrap_or(vec![T::zero(); rhs.len()]);
+            let mut cur_step: usize = 0;
+            
+            let mut r = self.mult_vec_parallel(&x);
+            r.par_iter_mut().enumerate().for_each(|(i, x)| *x = rhs[i] - *x);
+
+            let norm = |v: &Vec<T>| v.par_iter().cloned().reduce(|| T::zero(), |acc, x| acc + x * x);
+            let dot = |a: &Vec<T>, b: &Vec<T>| a.par_iter().cloned().zip(b).fold(|| T::zero(), |acc, (x, &y)| acc + x * y).sum();
+
+            let mut d = cond_rev.mult_vec_parallel(&r);
+            let mut delta_new = dot(&r, &d);
+            let delta_0 = delta_new;
+
+            while cur_step < max_steps && delta_new > tol * tol * delta_0 {
+                if cur_step % 100 == 0 {
+                    info!("{}/{} step, err = {}", cur_step, max_steps, delta_new - tol * tol * delta_0);
+                }
+                let q = self.mult_vec_parallel(&d);
+                let alpha = delta_new / dot(&d, &q);
+                
+                //x = x + alpha d
+                x.par_iter_mut().zip(&d).for_each(|(i, j)| *i = *i + alpha * *j);
+
+                if cur_step % 50 == 0 {
+                    let t = self.mult_vec_parallel(&x);
+                    r.par_iter_mut().enumerate().for_each(|(i, x)| *x = rhs[i] - t[i]);
+                } else {
+                    r.par_iter_mut().zip(&q).for_each(|(i, j)| *i = *i - alpha * *j);
+                }
+
+                let s = cond_rev.mult_vec_parallel(&r);
+                let delta_old = delta_new;
+                delta_new = dot(&r, &s);
+                let beta = delta_new / delta_old;
+                d.par_iter_mut().enumerate().for_each(|(i, v)| *v = s[i] + beta * *v);
+                cur_step += 1;
+            }
+            info!("parallel pcg over, step: {}", cur_step);
+            (x, cur_step)
+        }
+    }
+
     impl<T> CSRMatrix<T>
         where T: std::marker::Copy + std::ops::AddAssign
         + num_traits::float::Float + num_traits::ops::inv::Inv<Output = T> {
@@ -546,6 +609,21 @@ pub mod sparse {
                         data[r] = self.vals[c].inv();
                     }
                 }
+            }
+            CSRMatrix::new(data, rows, cols)
+        }
+        pub fn get_euclid_norm_cond_rev(&self) -> CSRMatrix<T> {
+            let mat_len = self.row_offset.len() - 1;
+            let mut data = vec![T::zero(); mat_len];
+            let rows = (0..mat_len).collect();
+            let cols = (0..mat_len).collect();
+            for r in 0..mat_len {
+                for c in self.row_offset[r]..self.row_offset[r + 1] {
+                    data[self.cols[c]] += self.vals[c] * self.vals[c];
+                }
+            }
+            for i in 0..data.len() {
+                data[i] = data[i].sqrt().inv();
             }
             CSRMatrix::new(data, rows, cols)
         }
@@ -588,18 +666,7 @@ pub mod sparse {
             res
         }
 
-        pub fn mult_vec_parallel(&self, rhs: &Vec<T>) -> Vec<T> {
-            assert_eq!(rhs.len(), self.row_offset.len() - 1);
-            let mut res: Vec<T> = vec![T::zero(); rhs.len()];
-            res.par_iter_mut().enumerate().for_each(|(i, x)| {
-                for j in self.row_offset[i]..self.row_offset[i + 1] {
-                    *x += self.vals[j] * rhs[self.cols[j]];
-                }
-            });
-            res
-        }
-
-        pub fn solve_cg_preconditioner(&self, rhs: &Vec<T>, tol: T, max_steps: usize, x: Option<Vec<T>>, cond_rev: CSRMatrix<T>) -> (Vec<T>, usize) {
+        pub fn solve_cg_precond(&self, rhs: &Vec<T>, tol: T, max_steps: usize, x: Option<Vec<T>>, cond_rev: CSRMatrix<T>) -> (Vec<T>, usize) {
              //solve A x = b
             let mut x = x.unwrap_or(vec![T::default(); rhs.len()]);
             let mut cur_step: usize = 0;
@@ -616,6 +683,7 @@ pub mod sparse {
 
             let mut sw = Stopwatch::start_new();
             let mut dis = 0.0 as f64;
+
             while cur_step < max_steps && delta_new > tol * tol * delta_0 {
                 println!("{}/{} step mult elapsed = {} err = {}\r", cur_step, max_steps, dis, delta_new - tol * tol * delta_0);
                 sw = Stopwatch::start_new(); 

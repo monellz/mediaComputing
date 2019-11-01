@@ -70,20 +70,18 @@ pub fn process(rgb_mat: RgbMatrix, s_rgb_mat: RgbMatrix, eps: f64) {
     let mut estimate = estimate.into_vec();
     //now solve L \alpha = \lambda b_s
     let mut b_s = b_s.into_vec();
-    println!("start solve");
 
     /*
     let ldlt = LdlNumeric::new(laplacian_mat.view()).unwrap();
     let mut alpha = ldlt.solve(&b_s);
     */
     //let (mut alpha, mut cur_step) = csr_mat.solve_cg(&b_s, 1e-5, 100000, None);
-    ///let cond_rev = csr_mat.get_jacobi_cond_rev();
-    let cond_rev = csr_mat.get_abs_norm_cond_rev();
-    let (mut alpha, mut cur_step) = csr_mat.solve_cg_preconditioner(&b_s, 1e-6, 100000, None, cond_rev);
+    //let cond_rev = csr_mat.get_jacobi_cond_rev();
+    //let cond_rev = csr_mat.get_abs_norm_cond_rev();
+    let cond_rev = csr_mat.get_euclid_norm_cond_rev();
+    //let (mut alpha, mut cur_step) = csr_mat.solve_cg_precond(&b_s, 1e-6, 100000, None, cond_rev);
+    let (mut alpha, mut cur_step) = csr_mat.solve_cg_precond_parallel(&b_s, 1e-6, 4000, None, cond_rev);
 
-
-    println!("cur_step = {}", cur_step);
-    println!("solve done");
 
     //nomralize
     alpha.iter_mut().for_each(|x| {
@@ -100,19 +98,18 @@ fn calculate_laplacian_slow(rgb_mat: &RgbMatrix, eps: f64, diag: Vec<f64>) -> CS
     let pix_num = rgb_mat.ncol() * rgb_mat.nrow();
     let win_row_count = rgb_mat.nrow() - WIN_LEN + 1;
     let win_col_count = rgb_mat.ncol() - WIN_LEN + 1;
-    dbg!(win_row_count * win_col_count);
 
     let mut win_mat = WinRefMatrix::from_rgb_matrix(rgb_mat, win_row_count, win_col_count);    
     
     //iterate over the windows and calculate the mean and covariance
     win_mat.calculate_all_distribution();
-    dbg!("distribution over");
+    info!("distribution calculated");
 
     win_mat.calculate_all_inner_mat(eps);
-    dbg!("inner_mat over");
+    info!("inner_mat calculated");
     
     let (mut rows, mut cols, mut data) = win_mat.create_tri_inds();
-    dbg!(data.len());
+    info!("tri_inds calculated, data.len = {}", data.len());
 
     //add diag
     (0..diag.len()).for_each(|i| {
@@ -136,10 +133,10 @@ fn calculate_laplacian(rgb_mat: &RgbMatrix, eps: f64, diag: Vec<f64>) -> CsMat<f
     
     //iterate over the windows and calculate the mean and covariance
     win_mat.calculate_all_distribution();
-    dbg!("distribution over");
+    info!("distribution calculated");
 
     win_mat.calculate_all_inner_mat(eps);
-    dbg!("inner_mat over");
+    info!("inner_mat calculated");
 
     /*
     let mut map = ItemMap::new();
