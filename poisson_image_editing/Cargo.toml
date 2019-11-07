@@ -1,0 +1,15 @@
+[package]
+name = "poisson_image_editing"
+version = "0.1.0"
+authors = ["monell <monell.zhong@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = "2.33.0"
+image = "*"
+num-traits = "0.2.8"
+rayon = "1.2.0"
+log = "0.4.8"
+simplelog = "^0.7.4"
