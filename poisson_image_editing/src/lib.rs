@@ -207,8 +207,6 @@ pub mod possion {
                 assert!(global_nbh.0 >= 0 && global_nbh.0 < img.bg_mat.nrow as i32 && global_nbh.1 >= 0 && global_nbh.1 < img.bg_mat.ncol as i32,
                         "the nbh of mask should be in background");
 
-                b += img.fg_mat[(channel, local_p.0, local_p.1)] - img.fg_mat[(channel, local_nbh.0 as usize, local_nbh.1 as usize)];
-
                 b += match img.clone_type {
                     CloneType::Naive => {
                         img.fg_mat[(channel, local_p.0, local_p.1)] - img.fg_mat[(channel, local_nbh.0 as usize, local_nbh.1 as usize)]
