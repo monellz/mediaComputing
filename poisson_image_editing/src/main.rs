@@ -30,24 +30,46 @@ fn main() {
                         .value_name("MASK")
                         .takes_value(true)
                         .help("foreground and mask should be of the same size"))
-                    .arg(Arg::with_name("offset")
-                        .short("offset")
-                        .long("offset")
-                        .value_name("OFFSET")
-                        .default_value("(0,0)"))
+                    .arg(Arg::with_name("x_offset")
+                        .short("x_offset")
+                        .long("x_offset")
+                        .value_name("X_OFFSET")
+                        .takes_value(true)
+                        .default_value("0"))
+                    .arg(Arg::with_name("y_offset")
+                        .short("y_offset")
+                        .long("y_offset")
+                        .value_name("Y_OFFSET")
+                        .takes_value(true)
+                        .default_value("0"))
                     .arg(Arg::with_name("type")
                         .long("type")
                         .short("type")
                         .value_name("CLONE_TYPE")
                         .takes_value(true)
                         .possible_values(&["naive", "mix_gradient"])
-                        .default_value("naive"))
+                        .default_value("mix_gradient"))
+                    .arg(Arg::with_name("output")
+                        .short("output")
+                        .long("output")
+                        .value_name("OUTPUT_PATH")
+                        .takes_value(true)
+                        .default_value("cloned.png"))
                     .get_matches();
-    info!("current directory: {:?}", std::env::current_dir().unwrap());
-
     let bg = matches.value_of("background").unwrap();
     let fg = matches.value_of("foreground").unwrap();
     let mask = matches.value_of("mask").unwrap();
+    let x_offset: usize = matches.value_of("x_offset").unwrap().parse().unwrap();
+    let y_offset: usize = matches.value_of("y_offset").unwrap().parse().unwrap();
+    let output = matches.value_of("output").unwrap();
+    let clone_type = match matches.value_of("type").unwrap() {
+        "naive" => CloneType::Naive,
+        "mix_gradient" => CloneType::MixGradient,
+        _ => {
+            warn!("unexpected clone type, set naive for default");
+            CloneType::Naive
+        }
+    };
 
     let bg = image::open(bg).unwrap().to_rgb();
     let bg_h = bg.height() as usize;
@@ -63,10 +85,9 @@ fn main() {
     let fg_mat = RgbMatrix::from_raw_vec(fg.into_raw(), fg_h, fg_w);
     let fg_mask_mat = MaskMatrix::from_raw_vec(mask.into_raw(), mask_h, mask_w);
 
-    let init_img = CloningImage::from_mat(bg_mat, fg_mat, fg_mask_mat, (0, 0), CloneType::Naive);
+    let init_img = CloningImage::from_mat(bg_mat, fg_mat, fg_mask_mat, (x_offset, y_offset), clone_type);
 
-    //let modified_bg_mat = possion::process(bg_mat, fg, CloneType::MixGradient);
     let modified_img = possion::process(init_img);
 
-    modified_img.bg_mat.save_img("cloned.png");
+    modified_img.bg_mat.save_img(output);
 }

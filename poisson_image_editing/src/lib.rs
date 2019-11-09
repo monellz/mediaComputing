@@ -1,8 +1,6 @@
 use log::*;
 use image::ImageBuffer;
 
-use std::collections::HashMap;
-
 const MASK: u8 = 110;
 
 pub enum CloneType {
@@ -76,7 +74,6 @@ impl std::ops::IndexMut<(usize, usize, usize)> for RgbMatrix {
 impl MaskMatrix {
     pub fn from_raw_vec(mask: Vec<u8>, nrow: usize, ncol: usize) -> MaskMatrix {
         let mut elem: Vec<Option<usize>> = vec![];
-        println!("mask len = {}", mask.len());
         let mut mask_cnt = 0 as usize;
         (0..mask.len()).step_by(3).for_each(|i| {
             if mask[i] >= MASK {
@@ -92,22 +89,6 @@ impl MaskMatrix {
             nrow,
             ncol
         }
-    }
-
-    pub fn save_img(&self, fname: &str) {
-        info!("save mask img to {}", fname);
-
-        let mut image = ImageBuffer::<image::Rgb<u8>, Vec<_>>::new(self.ncol as u32, self.nrow as u32);
-        for i in 0..self.ncol {
-            for j in 0..self.nrow {
-                let elem_idx = j * self.ncol + i;
-                match self.elem[elem_idx] {
-                    Some(_) => *image.get_pixel_mut(i as u32, j as u32) = image::Rgb([255, 255, 255]),
-                    None => *image.get_pixel_mut(i as u32, j as u32) = image::Rgb([0, 0, 0])
-                };
-            }
-        }
-        image.save(fname).unwrap();
     }
 }
 
@@ -131,7 +112,6 @@ pub struct CloningImage {
     fg_mask_mat:    MaskMatrix,
     fg_mask_idx:    Vec<(usize, usize)>,
     bg_mask_idx:    Vec<(usize, usize)>,
-    offset:         (usize, usize),
     clone_type:     CloneType,
 }
 
@@ -157,37 +137,9 @@ impl CloningImage {
             fg_mask_mat,
             fg_mask_idx,
             bg_mask_idx,
-            offset,
             clone_type
         }
     }
-
-
-    fn is_mask_boundary(&self, global_cur: (usize, usize), local_cur: (usize, usize)) -> bool {
-        //global_idx has been conformed to be in background
-        let dx = [0, 0, 1, -1];
-        let dy = [1, -1, 0, 0];
-
-        for i in 0..4 {
-            let global_nbh = (dx[i] + global_cur.0 as i32, dy[i] + global_cur.1 as i32);
-
-            if global_nbh.0 >= 0 && global_nbh.0 < self.bg_mat.nrow as i32 && global_nbh.1 >= 0 && global_nbh.1 < self.bg_mat.ncol as i32 {
-                //nbh is in background
-                let local_nbh = (global_nbh.0 - self.offset.0 as i32, global_nbh.1 - self.offset.1 as i32);
-
-                if local_nbh.0 >= 0 && local_nbh.0 < self.fg_mat.nrow as i32 && local_nbh.1 >= 0 && local_nbh.1 < self.fg_mat.ncol as i32 {
-                    //nbh is in foreground
-                    if let Some(_) = self.fg_mask_mat[(local_nbh.0 as usize, local_nbh.1 as usize)] {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        //???
-        unreachable!();
-        false
-    } 
 }
 
 
@@ -205,7 +157,15 @@ pub mod possion {
             let cond_rev = csr_mat.get_euclid_norm_cond_rev();
 
             info!("calculate for {} channel", channel[c]);
-            let res = csr_mat.solve_pcg_parallel(&rhs, 1e-6, 4000, None, cond_rev);
+            let mut res = csr_mat.solve_pcg_parallel(&rhs, 1e-6, 4000, None, cond_rev);
+
+            //normalize
+            //it's really necessary/important!!! 
+            res.iter_mut().for_each(|r| {
+                if *r > 1.0 { *r = 1.0; }
+                else if *r < 0.0 { *r = 0.0; }
+            });
+
 
             info!("update background for {} channel", channel[c]);
             for i in 0..img.bg_mask_idx.len() {
@@ -242,38 +202,36 @@ pub mod possion {
                 let local_nbh = (local_p.0 as i32 + dx[i], local_p.1 as i32 + dy[i]);
                 let global_nbh = (global_p.0 as i32 + dx[i], global_p.1 as i32 + dy[i]);
 
-                if local_nbh.0 < 0 || local_nbh.0 >= img.fg_mat.nrow as i32 || local_nbh.1 < 0 || local_nbh.1 >= img.fg_mat.ncol as i32 {
-                    warn!("local {:?} 's nbh {:?} is not in fg_mat nrow: {} ncol: {}", local_p, local_nbh, img.fg_mat.nrow, img.fg_mat.ncol);
-                }
+                assert!(local_nbh.0 >= 0 && local_nbh.0 < img.fg_mat.nrow as i32 && local_nbh.1 >= 0 && local_nbh.1 < img.fg_mat.ncol as i32,
+                        "the nbh of mask should be in foreground");
+                assert!(global_nbh.0 >= 0 && global_nbh.0 < img.bg_mat.nrow as i32 && global_nbh.1 >= 0 && global_nbh.1 < img.bg_mat.ncol as i32,
+                        "the nbh of mask should be in background");
 
-                assert!(global_nbh.0 >= 0 && global_nbh.0 < img.bg_mat.nrow as i32 && global_nbh.1 >= 0 && global_nbh.1 < img.bg_mat.ncol as i32);
-
-                //TODO!!
-                //there are some problems!!!
                 b += img.fg_mat[(channel, local_p.0, local_p.1)] - img.fg_mat[(channel, local_nbh.0 as usize, local_nbh.1 as usize)];
 
-                //there are also some problems!!!
-                if let Some(q) = img.fg_mask_mat[(local_nbh.0 as usize, local_nbh.1 as usize)] {
-                    //nbh in masked field
-                    vals.push(-1.0);
-                    rows.push(p);
-                    cols.push(q);
-                    assert_eq!(img.fg_mask_idx[q], (local_nbh.0 as usize, local_nbh.1 as usize));
-                    assert_eq!(img.bg_mask_idx[q], (global_nbh.0 as usize, global_nbh.1 as usize));
-                    assert!(q >= 0 && q < img.fg_mask_idx.len());
-                } else {
-                    /*
-                    let global_nbh = (global_nbh.0 as usize, global_nbh.1 as usize);
-                    let local_nbh = (local_nbh.0 as usize, local_nbh.1 as usize);
-                    if img.is_mask_boundary(global_nbh, local_nbh) {
-                        //nbh is in mask boundary
-                        b += img.bg_mat[(channel, global_nbh.0, global_nbh.1)];
-                        //b += img.fg_mat[(channel, local_nbh.0, local_nbh.1)];
+                b += match img.clone_type {
+                    CloneType::Naive => {
+                        img.fg_mat[(channel, local_p.0, local_p.1)] - img.fg_mat[(channel, local_nbh.0 as usize, local_nbh.1 as usize)]
+                    },
+                    CloneType::MixGradient => {
+                        let delta_f = img.fg_mat[(channel, local_p.0, local_p.1)] - img.fg_mat[(channel, local_nbh.0 as usize, local_nbh.1 as usize)];
+                        let delta_b = img.bg_mat[(channel, global_p.0, global_p.1)] - img.bg_mat[(channel, global_nbh.0 as usize, global_nbh.1 as usize)];
+                        if delta_f.abs() > delta_b.abs() { delta_f }
+                        else { delta_b }
                     }
-                    */
-                    b += img.bg_mat[(channel, global_nbh.0 as usize, global_nbh.1 as usize)];
-                }
-                
+                };
+
+                match img.fg_mask_mat[(local_nbh.0 as usize, local_nbh.1 as usize)] {
+                    Some(q) => {
+                        //nbh in masked field
+                        vals.push(-1.0);
+                        rows.push(p);
+                        cols.push(q);
+                    },
+                    None => {
+                        b += img.bg_mat[(channel, global_nbh.0 as usize, global_nbh.1 as usize)];
+                    }
+                };
             }
             rhs.push(b);
         }
