@@ -76,9 +76,12 @@ impl std::ops::IndexMut<(usize, usize, usize)> for RgbMatrix {
 impl MaskMatrix {
     pub fn from_raw_vec(mask: Vec<u8>, nrow: usize, ncol: usize) -> MaskMatrix {
         let mut elem: Vec<Option<usize>> = vec![];
+        println!("mask len = {}", mask.len());
+        let mut mask_cnt = 0 as usize;
         (0..mask.len()).step_by(3).for_each(|i| {
             if mask[i] >= MASK {
-                elem.push(Some(elem.len()));
+                elem.push(Some(mask_cnt));
+                mask_cnt += 1;
             } else {
                 elem.push(None);
             }
@@ -160,19 +163,8 @@ impl CloningImage {
     }
 
 
-    fn is_mask_boundary(&self, global_cur: (usize, usize)) -> bool {
+    fn is_mask_boundary(&self, global_cur: (usize, usize), local_cur: (usize, usize)) -> bool {
         //global_idx has been conformed to be in background
-        
-        let local_cur = (global_cur.0 as i32 - self.offset.0 as i32, global_cur.1 as i32 - self.offset.1 as i32);
-        if local_cur.0 >= 0 && local_cur.1 < self.fg_mat.nrow as i32 && local_cur.1 >= 0 && local_cur.1 < self.fg_mat.ncol as i32 {
-            //cur is in foreground
-
-            //cur itself should not be masked
-            if let Some(_) = self.fg_mask_mat[(local_cur.0 as usize, local_cur.1 as usize)] {
-                return false;
-            }
-        }
-
         let dx = [0, 0, 1, -1];
         let dy = [1, -1, 0, 0];
 
@@ -192,6 +184,8 @@ impl CloningImage {
             }
         }
 
+        //???
+        unreachable!();
         false
     } 
 }
@@ -232,7 +226,9 @@ pub mod possion {
         let dx = [-1, 1, 0, 0];
         let dy = [0, 0, 1, -1];
 
-        img.fg_mask_idx.iter().enumerate().for_each(|(p, &local_p)| {
+        //img.fg_mask_idx.iter().enumerate().for_each(|(p, &local_p)| {
+        for p in 0..img.fg_mask_idx.len() {
+            let local_p = img.fg_mask_idx[p];
             let global_p = img.bg_mask_idx[p];
 
             vals.push(4.0);
@@ -262,17 +258,25 @@ pub mod possion {
                     vals.push(-1.0);
                     rows.push(p);
                     cols.push(q);
+                    assert_eq!(img.fg_mask_idx[q], (local_nbh.0 as usize, local_nbh.1 as usize));
+                    assert_eq!(img.bg_mask_idx[q], (global_nbh.0 as usize, global_nbh.1 as usize));
+                    assert!(q >= 0 && q < img.fg_mask_idx.len());
                 } else {
+                    /*
                     let global_nbh = (global_nbh.0 as usize, global_nbh.1 as usize);
-                    if img.is_mask_boundary(global_nbh) {
+                    let local_nbh = (local_nbh.0 as usize, local_nbh.1 as usize);
+                    if img.is_mask_boundary(global_nbh, local_nbh) {
                         //nbh is in mask boundary
                         b += img.bg_mat[(channel, global_nbh.0, global_nbh.1)];
+                        //b += img.fg_mat[(channel, local_nbh.0, local_nbh.1)];
                     }
+                    */
+                    b += img.bg_mat[(channel, global_nbh.0 as usize, global_nbh.1 as usize)];
                 }
+                
             }
-
             rhs.push(b);
-        });
+        }
 
         let csr_mat = sparse::CSRMatrix::new(vals, rows, cols);
 
