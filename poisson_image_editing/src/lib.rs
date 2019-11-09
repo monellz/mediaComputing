@@ -1,18 +1,29 @@
 use log::*;
 use image::ImageBuffer;
 
-const MASK: u8 = 0;
+use std::collections::HashMap;
+
+const MASK: u8 = 110;
 
 pub enum CloneType {
     Naive,
     MixGradient
 }
 
+
 pub struct RgbMatrix {
-    rgb: [Vec<f64>; 3],
+    rgb:    [Vec<f64>; 3],
     nrow:   usize,
-    ncol:   usize,
+    ncol:   usize
 }
+
+pub struct MaskMatrix {
+    elem:   Vec<Option<usize>>,
+    nrow:   usize,
+    ncol:   usize
+}
+
+
 
 impl RgbMatrix {
     pub fn from_raw_vec(raw: Vec<u8>, nrow: usize, ncol: usize) -> RgbMatrix {
@@ -37,9 +48,9 @@ impl RgbMatrix {
         info!("save img to {}", fname);
 
         let mut image = ImageBuffer::<image::Rgb<u8>, Vec<_>>::new(self.ncol as u32, self.nrow as u32);
-        for i in 0..self.nrow {
-            for j in 0..self.ncol {
-                let elem_idx = i * self.ncol + j;
+        for i in 0..self.ncol {
+            for j in 0..self.nrow {
+                let elem_idx = j * self.ncol + i;
                 let res = [self.rgb[0][elem_idx] * 255.0, self.rgb[1][elem_idx] * 255.0, self.rgb[2][elem_idx] * 255.0];
                 *image.get_pixel_mut(i as u32, j as u32) = image::Rgb([res[0] as u8, res[1] as u8, res[2] as u8]);
             }
@@ -49,103 +60,170 @@ impl RgbMatrix {
     }
 }
 
-
-pub struct Foreground {
-    mat:        RgbMatrix,
-    elem_idx:   Vec<usize>,
-    mask:       Vec<bool>,
-    offset:     (usize, usize),
+impl std::ops::Index<(usize, usize, usize)> for RgbMatrix {
+    type Output = f64;
+    fn index(&self, idx: (usize, usize, usize)) -> &Self::Output {
+        &self.rgb[idx.0][idx.1 * self.ncol + idx.2]
+    }
 }
 
-impl Foreground {
-    pub fn from_raw(mat: RgbMatrix, mask_raw: Vec<u8>, offset: (usize, usize)) -> Foreground {
-        assert_eq!(mask_raw.len(), mat.nrow * mat.ncol * 3, "mask and forground should be of the same size");
+impl std::ops::IndexMut<(usize, usize, usize)> for RgbMatrix {
+    fn index_mut(&mut self, idx: (usize, usize, usize)) -> &mut f64 {
+        &mut self.rgb[idx.0][idx.1 * self.ncol + idx.2]
+    }
+}
 
-        let mut elem_idx: Vec<usize> = vec![]; 
-        let mut mask: Vec<bool> = Vec::with_capacity(mat.nrow * mat.ncol);
-        (0..mask_raw.len()).step_by(3).for_each(|i| {
-            if mask_raw[i] == MASK {
-                elem_idx.push(i / 3);
-                mask.push(true);
+impl MaskMatrix {
+    pub fn from_raw_vec(mask: Vec<u8>, nrow: usize, ncol: usize) -> MaskMatrix {
+        let mut elem: Vec<Option<usize>> = vec![];
+        (0..mask.len()).step_by(3).for_each(|i| {
+            if mask[i] >= MASK {
+                elem.push(Some(elem.len()));
             } else {
-                mask.push(false);
+                elem.push(None);
             }
         });
 
-        Foreground {
-            mat,
-            elem_idx,
-            mask,
-            offset
+        MaskMatrix {
+            elem,
+            nrow,
+            ncol
         }
     }
 
-    fn local_idx(&self, p: usize) -> (usize, usize) {
-        (self.elem_idx[p] / self.mat.ncol, self.elem_idx[p] % self.mat.ncol)
+    pub fn save_img(&self, fname: &str) {
+        info!("save mask img to {}", fname);
+
+        let mut image = ImageBuffer::<image::Rgb<u8>, Vec<_>>::new(self.ncol as u32, self.nrow as u32);
+        for i in 0..self.ncol {
+            for j in 0..self.nrow {
+                let elem_idx = j * self.ncol + i;
+                match self.elem[elem_idx] {
+                    Some(_) => *image.get_pixel_mut(i as u32, j as u32) = image::Rgb([255, 255, 255]),
+                    None => *image.get_pixel_mut(i as u32, j as u32) = image::Rgb([0, 0, 0])
+                };
+            }
+        }
+        image.save(fname).unwrap();
+    }
+}
+
+impl std::ops::Index<(usize, usize)> for MaskMatrix {
+    type Output = Option<usize>;
+    fn index(&self, idx: (usize, usize)) -> &Self::Output {
+        &self.elem[idx.0 * self.ncol + idx.1]
+    }
+}
+
+impl std::ops::IndexMut<(usize, usize)> for MaskMatrix {
+    fn index_mut(&mut self, idx: (usize, usize)) -> &mut Option<usize> {
+        &mut self.elem[idx.0 * self.ncol + idx.1]
+    }
+}
+
+
+pub struct CloningImage {
+    pub bg_mat:     RgbMatrix,
+    fg_mat:         RgbMatrix,
+    fg_mask_mat:    MaskMatrix,
+    fg_mask_idx:    Vec<(usize, usize)>,
+    bg_mask_idx:    Vec<(usize, usize)>,
+    offset:         (usize, usize),
+    clone_type:     CloneType,
+}
+
+impl CloningImage {
+    pub fn from_mat(bg_mat: RgbMatrix, fg_mat: RgbMatrix, fg_mask_mat: MaskMatrix, offset: (usize, usize), clone_type: CloneType) -> CloningImage {
+        assert!(fg_mat.nrow == fg_mask_mat.nrow && fg_mat.ncol == fg_mask_mat.ncol, "mask and forground should be of the same size");
+
+        let mut fg_mask_idx: Vec<(usize, usize)> = vec![];
+        let mut bg_mask_idx: Vec<(usize, usize)> = vec![];
+
+        fg_mask_mat.elem.iter().enumerate().for_each(|(i, is_mask)| {
+            if let Some(_) = *is_mask {
+                let local = (i / fg_mask_mat.ncol, i % fg_mask_mat.ncol);
+                bg_mask_idx.push((local.0 + offset.0, local.1 + offset.1));
+                fg_mask_idx.push(local);
+            }
+        });
+
+
+        CloningImage {
+            bg_mat,
+            fg_mat,
+            fg_mask_mat,
+            fg_mask_idx,
+            bg_mask_idx,
+            offset,
+            clone_type
+        }
     }
 
-    fn global_idx(&self, p: usize) -> (usize, usize) {
-        let local = self.local_idx(p);
-        (local.0 + self.offset.0, local.1 + self.offset.1)
-    }
 
+    fn is_mask_boundary(&self, global_cur: (usize, usize)) -> bool {
+        //global_idx has been conformed to be in background
+        
+        let local_cur = (global_cur.0 as i32 - self.offset.0 as i32, global_cur.1 as i32 - self.offset.1 as i32);
+        if local_cur.0 >= 0 && local_cur.1 < self.fg_mat.nrow as i32 && local_cur.1 >= 0 && local_cur.1 < self.fg_mat.ncol as i32 {
+            //cur is in foreground
 
-    fn is_boundary(&self, fg_idx: (i32, i32)) -> bool {
-        //the obj masked should not be on the boundary of foreground
-        assert!(fg_idx.0 >= 0 && fg_idx.0 < self.mat.nrow as i32 && fg_idx.1 >= 0 && fg_idx.1 < self.mat.ncol as i32, "the testing fg_idx should not be on the boundary of foreground");
-
-        if self.mask[fg_idx.0 as usize * self.mat.ncol + fg_idx.1 as usize] {
-            return false;
+            //cur itself should not be masked
+            if let Some(_) = self.fg_mask_mat[(local_cur.0 as usize, local_cur.1 as usize)] {
+                return false;
+            }
         }
 
         let dx = [0, 0, 1, -1];
         let dy = [1, -1, 0, 0];
 
         for i in 0..4 {
-            let idx = (fg_idx.0 + dx[i], fg_idx.1 + dy[i]);
-            
-            if idx.0 < 0 || idx.0 >= self.mat.nrow as i32 || idx.1 < 0 || idx.1 >= self.mat.ncol as i32 {
-                unreachable!("the nbh of testing fg_idx should be in the foreground")
-            }
+            let global_nbh = (dx[i] + global_cur.0 as i32, dy[i] + global_cur.1 as i32);
 
-            if self.mask[idx.0 as usize * self.mat.ncol + idx.1 as usize] {
-                return true;
+            if global_nbh.0 >= 0 && global_nbh.0 < self.bg_mat.nrow as i32 && global_nbh.1 >= 0 && global_nbh.1 < self.bg_mat.ncol as i32 {
+                //nbh is in background
+                let local_nbh = (global_nbh.0 - self.offset.0 as i32, global_nbh.1 - self.offset.1 as i32);
+
+                if local_nbh.0 >= 0 && local_nbh.0 < self.fg_mat.nrow as i32 && local_nbh.1 >= 0 && local_nbh.1 < self.fg_mat.ncol as i32 {
+                    //nbh is in foreground
+                    if let Some(_) = self.fg_mask_mat[(local_nbh.0 as usize, local_nbh.1 as usize)] {
+                        return true;
+                    }
+                }
             }
         }
 
         false
-    }
+    } 
 }
+
 
 
 pub mod possion {
     use super::*;
     use linear;
     use linear::sparse;
-    pub fn process(mut bg_mat: RgbMatrix, fg: Foreground, clone_type: CloneType) -> RgbMatrix {
+
+    pub fn process(mut img: CloningImage) -> CloningImage {
         let channel = ["red", "green", "blue"];
-        //solve for r/g/b
         for c in 0..3 {
             info!("setup for {} channel", channel[c]);
-            let (csr_mat, rhs) = setup_for_single_channel(&bg_mat, &fg, &clone_type, c);
+            let (csr_mat, rhs) = setup_for_single_channel(&img, c);
             let cond_rev = csr_mat.get_euclid_norm_cond_rev();
 
             info!("calculate for {} channel", channel[c]);
             let res = csr_mat.solve_pcg_parallel(&rhs, 1e-6, 4000, None, cond_rev);
 
             info!("update background for {} channel", channel[c]);
-            for i in 0..fg.elem_idx.len() {
-                let global_idx = fg.global_idx(i);
-                let global_elem_idx = global_idx.0 * bg_mat.ncol + global_idx.1;
-
-                bg_mat.rgb[c][global_elem_idx] = res[i];
+            for i in 0..img.bg_mask_idx.len() {
+                let global = img.bg_mask_idx[i];
+                img.bg_mat[(c, global.0, global.1)] = res[i];
             }
         }
 
-        bg_mat
+        img
     }
 
-    fn setup_for_single_channel(bg_mat: &RgbMatrix, fg: &Foreground, clone_type: &CloneType, channel: usize) -> (sparse::CSRMatrix::<f64>, Vec<f64>) {
+    fn setup_for_single_channel(img: &CloningImage, channel: usize) -> (sparse::CSRMatrix::<f64>, Vec<f64>) {
         let mut vals: Vec<f64> = vec![];
         let mut rows: Vec<usize> = vec![];
         let mut cols: Vec<usize> = vec![];
@@ -154,53 +232,43 @@ pub mod possion {
         let dx = [-1, 1, 0, 0];
         let dy = [0, 0, 1, -1];
 
+        img.fg_mask_idx.iter().enumerate().for_each(|(p, &local_p)| {
+            let global_p = img.bg_mask_idx[p];
 
-        (0..fg.elem_idx.len()).for_each(|p| {
-            let local = fg.local_idx(p);
             vals.push(4.0);
             rows.push(p);
             cols.push(p);
 
             let mut b: f64 = 0.0;
-
+            
             //loop for nbh
             for i in 0..4 {
-                let nbh_idx = (local.0 as i32 + dx[i], local.1 as i32 + dy[i]);
-                assert!(nbh_idx.0 >= 0 && nbh_idx.0 < fg.mat.nrow as i32 && nbh_idx.1 >= 0 && nbh_idx.1 < fg.mat.ncol as i32, "the nbh of inner pixel should be in the foreground");
-                let q = nbh_idx.0 as usize * fg.mat.ncol + nbh_idx.1 as usize;
-                b += match clone_type {
-                    CloneType::Naive => fg.mat.rgb[channel][fg.elem_idx[p as usize]] - fg.mat.rgb[channel][fg.elem_idx[q as usize]],
-                    CloneType::MixGradient => {
-                        let delta_f = fg.mat.rgb[channel][fg.elem_idx[p as usize]] - fg.mat.rgb[channel][fg.elem_idx[q as usize]];
+                let local_nbh = (local_p.0 as i32 + dx[i], local_p.1 as i32 + dy[i]);
+                let global_nbh = (global_p.0 as i32 + dx[i], global_p.1 as i32 + dy[i]);
 
-                        let global_p = fg.global_idx(p as usize);
-                        let global_q = fg.global_idx(q as usize);
-                        let global_p = global_p.0 * bg_mat.ncol + global_p.1;
-                        let global_q = global_q.0 * bg_mat.ncol + global_q.1;
-
-                        let delta_b = bg_mat.rgb[channel][global_p] - bg_mat.rgb[channel][global_q];
-
-                        if delta_f > delta_b {
-                            delta_f
-                        } else {
-                            delta_b
-                        }
-                    }
-                };
-
-                if fg.mask[q as usize] {
-                    vals.push(-1.0);
-                    rows.push(p as usize);
-                    cols.push(q as usize);
-                } else {
-                    if fg.is_boundary(nbh_idx) {
-                        let global_idx_q = (nbh_idx.0 as usize + fg.offset.0, nbh_idx.1 as usize + fg.offset.1);
-                        assert!(global_idx_q.0 < bg_mat.nrow && global_idx_q.1 < bg_mat.ncol);
-
-                        b += bg_mat.rgb[channel][global_idx_q.0 * bg_mat.ncol + global_idx_q.1];
-                    }
+                if local_nbh.0 < 0 || local_nbh.0 >= img.fg_mat.nrow as i32 || local_nbh.1 < 0 || local_nbh.1 >= img.fg_mat.ncol as i32 {
+                    warn!("local {:?} 's nbh {:?} is not in fg_mat nrow: {} ncol: {}", local_p, local_nbh, img.fg_mat.nrow, img.fg_mat.ncol);
                 }
 
+                assert!(global_nbh.0 >= 0 && global_nbh.0 < img.bg_mat.nrow as i32 && global_nbh.1 >= 0 && global_nbh.1 < img.bg_mat.ncol as i32);
+
+                //TODO!!
+                //there are some problems!!!
+                b += img.fg_mat[(channel, local_p.0, local_p.1)] - img.fg_mat[(channel, local_nbh.0 as usize, local_nbh.1 as usize)];
+
+                //there are also some problems!!!
+                if let Some(q) = img.fg_mask_mat[(local_nbh.0 as usize, local_nbh.1 as usize)] {
+                    //nbh in masked field
+                    vals.push(-1.0);
+                    rows.push(p);
+                    cols.push(q);
+                } else {
+                    let global_nbh = (global_nbh.0 as usize, global_nbh.1 as usize);
+                    if img.is_mask_boundary(global_nbh) {
+                        //nbh is in mask boundary
+                        b += img.bg_mat[(channel, global_nbh.0, global_nbh.1)];
+                    }
+                }
             }
 
             rhs.push(b);
@@ -210,4 +278,5 @@ pub mod possion {
 
         (csr_mat, rhs)
     }
+
 }

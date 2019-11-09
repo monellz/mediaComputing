@@ -1,3 +1,10 @@
 image_matting/target
 image_matting/Cargo.lock
 image_matting/*.png
+image_matting/*.jpg
+poisson_image_editing/target
+poisson_image_editing/Cargo.lock
+poisson_image_editing/*.png
+poisson_image_editing/*.jpg
+linear/target
+linear/Cargo.lock

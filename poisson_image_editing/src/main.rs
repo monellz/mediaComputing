@@ -56,12 +56,17 @@ fn main() {
     let fg_h = fg.height() as usize;
     let fg_w = fg.width() as usize;
     let mask = image::open(mask).unwrap().to_rgb();
+    let mask_h = mask.height() as usize;
+    let mask_w = mask.width() as usize;
 
     let bg_mat = RgbMatrix::from_raw_vec(bg.into_raw(), bg_h, bg_w);
     let fg_mat = RgbMatrix::from_raw_vec(fg.into_raw(), fg_h, fg_w);
-    let fg = Foreground::from_raw(fg_mat, mask.into_raw(), (0, 0));
+    let fg_mask_mat = MaskMatrix::from_raw_vec(mask.into_raw(), mask_h, mask_w);
 
-    let modified_bg_mat = possion::process(bg_mat, fg, CloneType::MixGradient);
+    let init_img = CloningImage::from_mat(bg_mat, fg_mat, fg_mask_mat, (0, 0), CloneType::Naive);
 
-    modified_bg_mat.save_img("cloned.png");
+    //let modified_bg_mat = possion::process(bg_mat, fg, CloneType::MixGradient);
+    let modified_img = possion::process(init_img);
+
+    modified_img.bg_mat.save_img("cloned.png");
 }
