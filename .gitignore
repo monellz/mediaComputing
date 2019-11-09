@@ -7,5 +7,9 @@ poisson_image_editing/target
 poisson_image_editing/Cargo.lock
 poisson_image_editing/*.png
 poisson_image_editing/*.jpg
+coordinate_based_image_cloning/target
+coordinate_based_image_cloning/Cargo.lock
+coordinate_based_image_cloning/*.png
+coordinate_based_image_cloning/*.jpg
 linear/target
 linear/Cargo.lock
