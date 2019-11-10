@@ -69,7 +69,7 @@ pub struct CloningImage {
     fg_mat:         RgbMatrix,
     fg_mask_idx:    Vec<(usize, usize)>,
     bg_mask_idx:    Vec<(usize, usize)>,
-    //(x, y, r, b, b)
+    //(x, y, r, g, b)
     fg_bound:       Vec<(usize, usize, f64, f64, f64)>
 }
 
