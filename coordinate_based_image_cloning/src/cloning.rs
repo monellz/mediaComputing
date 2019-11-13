@@ -2,11 +2,17 @@ use crate::*;
 
 
 pub fn process(mut img: CloningImage) -> CloningImage {
+    let normalize = |x: f64| {
+        if x > 1.0 { return 1.0f64; }
+        else if x < 0.0 { return 0.0f64; }
+        x
+    };
     let dis2 = |a: (usize, usize), b: (usize, usize)| {
         let x = a.0 as f64 - b.0 as f64;
         let y = a.1 as f64 - b.1 as f64;
         x * x + y * y
     };
+    //it can be optimized from http://pages.cs.wisc.edu/~csverma/CS777/bary.html
     let half_tan = |a: (usize, usize), b: (usize, usize), c: (usize, usize)| {
         // <a, b, c
         let ac2 = dis2(a, c);
@@ -14,16 +20,10 @@ pub fn process(mut img: CloningImage) -> CloningImage {
         let ab2 = dis2(a, b);
 
         let cos = (ab2 + bc2 - ac2) / (2.0 * ab2.sqrt() * bc2.sqrt());
+        let cos = if cos > 1.0 { 1.0f64 } else if cos < -1.0 { -1.0f64 } else { cos };
 
         ((1.0 - cos) / (1.0 + cos)).sqrt()
     };
-
-    let normalize = |x: f64| {
-        if x > 1.0 { return 1.0f64; }
-        else if x < 0.0 { return 0.0f64; }
-        x
-    };
-
 
     (0..img.fg_mask_idx.len()).for_each(|i| {
         if i % 500 == 0 {
@@ -53,6 +53,7 @@ pub fn process(mut img: CloningImage) -> CloningImage {
         r[0] = mvc.iter().enumerate().fold(0.0, |acc, (i, &v)| acc + v * img.fg_bound[i].2);
         r[1] = mvc.iter().enumerate().fold(0.0, |acc, (i, &v)| acc + v * img.fg_bound[i].3);
         r[2] = mvc.iter().enumerate().fold(0.0, |acc, (i, &v)| acc + v * img.fg_bound[i].4);
+
         let global_i =  img.bg_mask_idx[i];
         img.bg_mat[(0, global_i.0, global_i.1)] = normalize(r[0] + img.fg_mat[(0, local_i.0, local_i.1)]); 
         img.bg_mat[(1, global_i.0, global_i.1)] = normalize(r[1] + img.fg_mat[(1, local_i.0, local_i.1)]); 
@@ -120,17 +121,18 @@ impl CloningImage {
             };
         }
 
-        let center = (center.0 as f64 / fg_bound.len() as f64, center.1 as f64 / fg_bound.len() as f64);
+        let center = (center.0 as f32 / fg_bound.len() as f32, center.1 as f32 / fg_bound.len() as f32);
         fg_bound.sort_by(|a, b| {
             if a.0 == 0 && b.0 == 0 { return (a.1).cmp(&b.1).reverse(); }
 
-            let det = (a.0 as f64 - center.0) * (b.1 as f64 - center.1) - (b.0 as f64 - center.0) * (a.1 as f64 - center.1);
+            let det = (a.0 as f32 - center.0) * (b.1 as f32 - center.1) - (b.0 as f32 - center.0) * (a.1 as f32 - center.1);
             if det < 0.0 { return std::cmp::Ordering::Less; }
             else if det > 0.0 { return std::cmp::Ordering::Greater; }
 
-            let a_len2 = (a.0 as f64 - center.0) * (a.0 as f64 - center.0) + (a.1 as f64 - center.1) * (a.1 as f64 - center.1);
-            let b_len2 = (b.0 as f64 - center.0) * (b.0 as f64 - center.0) + (b.1 as f64 - center.1) * (b.1 as f64 - center.1);
+            let a_len2 = (a.0 as f32 - center.0) * (a.0 as f32 - center.0) + (a.1 as f32 - center.1) * (a.1 as f32 - center.1);
+            let b_len2 = (b.0 as f32 - center.0) * (b.0 as f32 - center.0) + (b.1 as f32 - center.1) * (b.1 as f32 - center.1);
             a_len2.partial_cmp(&b_len2).unwrap().reverse()
+            //a_len2.cmp(&b_len2).reverse()
         });
 
         CloningImage {
