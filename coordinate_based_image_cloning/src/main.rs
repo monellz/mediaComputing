@@ -6,6 +6,8 @@ extern crate log;
 extern crate simplelog;
 use simplelog::*;
 
+#[macro_use]
+extern crate rustacuda;
 
 mod lib;
 use lib::*;
@@ -55,7 +57,7 @@ fn main() {
                         .value_name("PARALLEL_TYPE")
                         .takes_value(true)
                         .default_value("thread")
-                        .possible_values(&["naive", "thread"]))
+                        .possible_values(&["naive", "thread", "gpu"]))
                     .get_matches();
 
     let bg = matches.value_of("background").unwrap();
@@ -67,6 +69,7 @@ fn main() {
     let parallel_type = match matches.value_of("parallel_type").unwrap() {
         "naive" => ParallelType::Naive,
         "thread" => ParallelType::Thread,
+        "gpu" => ParallelType::GPU,
         _ => {
             warn!("unexpected parallel type, set default naive");
             ParallelType::Naive

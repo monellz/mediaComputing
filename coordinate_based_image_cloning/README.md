@@ -27,10 +27,18 @@ OPTIONS:
     -f, --foreground <FOREGROUND_IMAGE>    
     -m, --mask <MASK>                      foreground and mask should be of the same size
     -o, --output <OUTPUT_PATH>              [default: cloned.png]
-    -p, --parallel_type <PARALLEL_TYPE>     [default: thread]  [possible values: naive, thread]
+    -p, --parallel_type <PARALLEL_TYPE>     [default: thread]  [possible values: naive, thread, gpu]
     -x, --x_offset <X_OFFSET>               [default: 0]
     -y, --y_offset <Y_OFFSET>               [default: 0]
 ```
+
+## Performance
+
+| #cloned pixels | #boundary pixels | No parallel | Thread | GPU  |
+| -------------- | ---------------- | ----------- | ------ | ---- |
+|                |                  |             |        |      |
+
+
 
 ## Result
 

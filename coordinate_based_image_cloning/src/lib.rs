@@ -10,7 +10,8 @@ const MASK: u8 = 110;
 
 pub enum ParallelType {
     Naive,
-    Thread
+    Thread,
+    GPU
 }
 
 

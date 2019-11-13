@@ -3,9 +3,12 @@ use crate::lib::uniq_refs;
 use std::collections::BTreeSet;
 use rayon::prelude::*;
 
-pub fn process(mut bg_mat: RgbMatrix, fg_mat: RgbMatrix, fg_mask_mat: MaskMatrix, offset: (usize, usize), para_type: ParallelType) -> RgbMatrix {
-    let (fg_mask_idx, fg_bound_idx, fg_bound_color) = setup_for_processing(&bg_mat, &fg_mat, &fg_mask_mat, &offset);
 
+use rustacuda::prelude::*;
+use rustacuda::memory::DeviceBuffer;
+use std::ffi::CString;
+
+pub fn process(mut bg_mat: RgbMatrix, fg_mat: RgbMatrix, fg_mask_mat: MaskMatrix, offset: (usize, usize), para_type: ParallelType) -> RgbMatrix {
     let normalize = |mut x: Rgb| {
         if x[0] > 1.0 { x[0] = 1.0; }
         else if x[0] < 0.0 { x[0] = 0.0; }
@@ -33,14 +36,17 @@ pub fn process(mut bg_mat: RgbMatrix, fg_mat: RgbMatrix, fg_mask_mat: MaskMatrix
         ((1.0 - cos) / (1.0 + cos)).sqrt()
     };
 
+    let (fg_mask_idx, fg_bound_idx, fg_bound_color) = setup_for_processing(&bg_mat, &fg_mat, &fg_mask_mat, &offset);
+
+
     match para_type {
         ParallelType::Naive => {
             info!("calculate for masked pixel, total num: {}", fg_mask_idx.len());
             fg_mask_idx.iter().enumerate().for_each(|(i, &local)| {
                 if i % 1000 == 0 { info!("pixel {}/{}", i, fg_mask_idx.len()); }
                 //compute the mean-value coordinates
-                let mut mvc = Vec::<f64>::with_capacity(fg_bound_idx.len());
                 let mut sum: f64 = 0.0;
+                let mut rgb = Rgb::new();
                 fg_bound_idx.iter().enumerate().for_each(|(b, &cur)| {
                     let prev = if b == 0 { fg_bound_idx[fg_bound_idx.len() - 1] } else { fg_bound_idx[b - 1] };
                     let next = if b == fg_bound_idx.len() - 1 { fg_bound_idx[0] } else { fg_bound_idx[b + 1] };
@@ -48,21 +54,14 @@ pub fn process(mut bg_mat: RgbMatrix, fg_mat: RgbMatrix, fg_mask_mat: MaskMatrix
                     let w = (half_tan(prev, local, cur) + half_tan(cur, local, next)) / dis2(cur, local).sqrt();
 
                     sum += w;
-                    mvc.push(w);
+                    rgb += fg_bound_color[b] * w;
                 });
-
-                mvc.iter_mut().for_each(|v| {
-                    *v /= sum;
-                });
-
 
                 //evaluate the mean-value interpolant 
-                let rgb = mvc.iter().enumerate().fold(Rgb::from_raw([0.0, 0.0, 0.0]), |acc, (i, &v)| acc + fg_bound_color[i] * v);
                 let global = (local.0 + offset.0, local.1 + offset.1);
-                bg_mat[global] = normalize(rgb + fg_mat[local]);
+                bg_mat[global] = normalize(rgb / sum + fg_mat[local]);
             });
         },
-
         ParallelType::Thread => {
             info!("prepare for thread parallel");
             let mut masked_pixel: Vec<_> = {
@@ -78,8 +77,8 @@ pub fn process(mut bg_mat: RgbMatrix, fg_mat: RgbMatrix, fg_mask_mat: MaskMatrix
             masked_pixel.par_iter_mut().enumerate().for_each(|(i, masked_pixel)| {
                 let local = fg_mask_idx[i];
                 //compute the mean-value coordinates
-                let mut mvc = Vec::<f64>::with_capacity(fg_bound_idx.len());
                 let mut sum: f64 = 0.0;
+                let mut rgb = Rgb::new();
                 fg_bound_idx.iter().enumerate().for_each(|(b, &cur)| {
                     let prev = if b == 0 { fg_bound_idx[fg_bound_idx.len() - 1] } else { fg_bound_idx[b - 1] };
                     let next = if b == fg_bound_idx.len() - 1 { fg_bound_idx[0] } else { fg_bound_idx[b + 1] };
@@ -87,26 +86,93 @@ pub fn process(mut bg_mat: RgbMatrix, fg_mat: RgbMatrix, fg_mask_mat: MaskMatrix
                     let w = (half_tan(prev, local, cur) + half_tan(cur, local, next)) / dis2(cur, local).sqrt();
 
                     sum += w;
-                    mvc.push(w);
-                });
-
-                mvc.iter_mut().for_each(|v| {
-                    *v /= sum;
+                    rgb += fg_bound_color[b] * w;
                 });
 
                 //evaluate the mean-value interpolant 
-                let rgb = mvc.iter().enumerate().fold(Rgb::from_raw([0.0, 0.0, 0.0]), |acc, (i, &v)| acc + fg_bound_color[i] * v);
-                **masked_pixel = normalize(rgb + fg_mat[local]);
+                **masked_pixel = normalize(rgb / sum + fg_mat[local]);
             });
+        },
+        ParallelType::GPU => {
+            info!("prepare for GPU");
+            rustacuda::init(CudaFlags::empty()).unwrap();
+            let device = Device::get_device(0).unwrap();
+            let _context = Context::create_and_push(ContextFlags::MAP_HOST | ContextFlags::SCHED_AUTO, device).unwrap();
+            let module_data = CString::new(include_str!("./cuda/mvc_interpolant.ptx")).unwrap();
+            let module = Module::load_from_string(&module_data).unwrap();
+            let stream = Stream::new(StreamFlags::NON_BLOCKING, None).unwrap();
 
+            let mut dev_fg_mask_idx_x = DeviceBuffer::from_slice(fg_mask_idx.iter().map(|x| x.0 as u32 ).collect::<Vec<_>>().as_slice()).unwrap();
+            let mut dev_fg_mask_idx_y = DeviceBuffer::from_slice(fg_mask_idx.iter().map(|x| x.1 as u32 ).collect::<Vec<_>>().as_slice()).unwrap();
+            let mut dev_fg_bound_idx_x = DeviceBuffer::from_slice(fg_bound_idx.iter().map(|x| x.0 as u32 ).collect::<Vec<_>>().as_slice()).unwrap();
+            let mut dev_fg_bound_idx_y = DeviceBuffer::from_slice(fg_bound_idx.iter().map(|x| x.1 as u32 ).collect::<Vec<_>>().as_slice()).unwrap();
+            let mut dev_fg_bound_r = DeviceBuffer::from_slice(fg_bound_color.iter().map(|x| x[0] ).collect::<Vec<_>>().as_slice()).unwrap();
+            let mut dev_fg_bound_g = DeviceBuffer::from_slice(fg_bound_color.iter().map(|x| x[1] ).collect::<Vec<_>>().as_slice()).unwrap();
+            let mut dev_fg_bound_b = DeviceBuffer::from_slice(fg_bound_color.iter().map(|x| x[2] ).collect::<Vec<_>>().as_slice()).unwrap();
 
+            let mut dev_out_r = unsafe { DeviceBuffer::uninitialized(fg_mask_idx.len()).unwrap() };
+            let mut dev_out_g = unsafe { DeviceBuffer::uninitialized(fg_mask_idx.len()).unwrap() };
+            let mut dev_out_b = unsafe { DeviceBuffer::uninitialized(fg_mask_idx.len()).unwrap() };
+
+            info!("call kernel function");
+            unsafe {
+                //launch the kernel function
+                launch!(module.mvc_interpolant<<<1024, 1024, 0, stream>>>(
+                    //input
+                    dev_fg_mask_idx_x.as_device_ptr(),
+                    dev_fg_mask_idx_y.as_device_ptr(),
+                    dev_fg_bound_idx_x.as_device_ptr(),
+                    dev_fg_bound_idx_y.as_device_ptr(),
+
+                    dev_fg_bound_r.as_device_ptr(),
+                    dev_fg_bound_g.as_device_ptr(),
+                    dev_fg_bound_b.as_device_ptr(),
+
+                    fg_mask_idx.len() as u32,
+                    fg_bound_idx.len() as u32,
+
+                    //output
+                    dev_out_r.as_device_ptr(),
+                    dev_out_g.as_device_ptr(),
+                    dev_out_b.as_device_ptr()
+                )).unwrap();
+            }
+            
+            //for cpu, alloc the memory preparing for copy
+            let mut out_r = vec![0.0f64; fg_mask_idx.len()];
+            let mut out_g = vec![0.0f64; fg_mask_idx.len()];
+            let mut out_b = vec![0.0f64; fg_mask_idx.len()];
+
+            //also, prepare for assiging the result
+            let mut masked_pixel: Vec<_> = {
+                let mut idx = BTreeSet::new();
+                fg_mask_idx.iter().for_each(|&local| {
+                    let e = (local.0 + offset.0) * bg_mat.ncol + local.1 + offset.1;
+                    idx.insert(e);
+                });
+                uniq_refs(&mut bg_mat.rgb[..], &idx).collect()
+            };
+
+            stream.synchronize().unwrap();
+
+            info!("kernel synchronized");
+
+            //copy from device to host
+            dev_out_r.copy_to(&mut out_r).unwrap();
+            dev_out_g.copy_to(&mut out_g).unwrap();
+            dev_out_b.copy_to(&mut out_b).unwrap();
+
+            //parallel assign
+            masked_pixel.par_iter_mut().enumerate().for_each(|(i, masked_pixel)| {
+               **masked_pixel = normalize(Rgb::from_raw([out_r[i], out_g[i], out_b[i]]) + fg_mat[fg_mask_idx[i]]);
+            });
         }
     };
 
-    info!("calculated");
-
+    info!("all over");
     bg_mat
 }
+
 
 fn setup_for_processing(bg_mat: &RgbMatrix, fg_mat: &RgbMatrix, fg_mask_mat: &MaskMatrix, offset: &(usize, usize))
     -> (Vec<(usize, usize)>, Vec<(usize, usize)>, Vec<Rgb>) {
