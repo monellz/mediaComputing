@@ -83,13 +83,19 @@ impl CloningImage {
 
         let mut fg_bound: Vec<(usize, usize, f64, f64, f64)> = vec![];
 
-        let dx = [0, 0, 1, -1];
-        let dy = [1, -1, 0, 0];
+        let dx = [0, 1, 0, -1];
+        let dy = [-1, 0, 1, 0];
 
-        let mut center = (0, 0);
+        let mut boundary_map: Vec<Option<(f64, f64, f64)>> = vec![];
+
+        //top point
+        let mut init_boundary_pt = (fg_mask_mat.nrow, fg_mask_mat.ncol);
+
+        let mut boundary_cnt = 0 as usize;
 
         for i in 0..fg_mask_mat.elem.len() {
             let local = (i / fg_mask_mat.ncol, i % fg_mask_mat.ncol);
+            boundary_map.push(None);
             match fg_mask_mat.elem[i] {
                 Some(_) => {
                     bg_mask_idx.push((local.0 + offset.0, local.1 + offset.1));
@@ -104,15 +110,16 @@ impl CloningImage {
                             let local_nbh = (local_nbh.0 as usize, local_nbh.1 as usize);
                             if let Some(_) = fg_mask_mat[local_nbh] {
                                 //local is in boundary
+                                if local.0 < init_boundary_pt.0 { init_boundary_pt = local; }
+                                boundary_cnt += 1;
+
                                 let global = (offset.0 + local.0, offset.1 + local.1);
                                 let r = bg_mat[(0, global.0, global.1)] - fg_mat[(0, local.0, local.1)];
                                 let g = bg_mat[(1, global.0, global.1)] - fg_mat[(1, local.0, local.1)];
                                 let b = bg_mat[(2, global.0, global.1)] - fg_mat[(2, local.0, local.1)];
 
-                                fg_bound.push((local.0, local.1, r, g, b));
+                                *boundary_map.last_mut().unwrap() = Some((r, g, b));
 
-                                center.0 += local.0;
-                                center.1 += local.1;
                                 break;
                             }
                         }
@@ -121,6 +128,39 @@ impl CloningImage {
             };
         }
 
+        println!("bondary cnt = {}", boundary_cnt);
+
+        let (r, g, b) = match boundary_map[init_boundary_pt.0 * fg_mask_mat.ncol + init_boundary_pt.1] {
+            Some((r, g, b)) => (r, g, b),
+            None => unreachable!()
+        };
+        fg_bound.push((init_boundary_pt.0, init_boundary_pt.1, r, g, b));
+
+        let dx = [0, 1, 1, 1, 0, -1, -1, -1];
+        let dy = [-1, -1, 0, 1, 1, 1, 0, -1];
+
+
+        loop {
+            let mut over = true;
+            for i in 0..8 {
+                let nbh = (init_boundary_pt.0 as i32 + dx[i], init_boundary_pt.1 as i32 + dy[i]);
+                if nbh.0 >= 0 && nbh.0 < fg_mask_mat.nrow as i32 && nbh.1 >= 0 && nbh.1 < fg_mask_mat.ncol as i32 {
+                    let nbh = (nbh.0 as usize, nbh.1 as usize);
+                    if let Some((r, g, b)) = boundary_map[nbh.0 * fg_mask_mat.ncol + nbh.1] {
+                        fg_bound.push((nbh.0, nbh.1, r, g, b));
+                        boundary_map[init_boundary_pt.0 * fg_mask_mat.ncol + init_boundary_pt.1] = None;
+                        init_boundary_pt = nbh;
+                        over = false;
+                        break;
+                    }
+                }
+            }
+            if over { break; }
+        }
+
+        assert_eq!(boundary_cnt, fg_bound.len());
+
+        /*
         let center = (center.0 as f32 / fg_bound.len() as f32, center.1 as f32 / fg_bound.len() as f32);
         fg_bound.sort_by(|a, b| {
             if a.0 == 0 && b.0 == 0 { return (a.1).cmp(&b.1).reverse(); }
@@ -132,8 +172,8 @@ impl CloningImage {
             let a_len2 = (a.0 as f32 - center.0) * (a.0 as f32 - center.0) + (a.1 as f32 - center.1) * (a.1 as f32 - center.1);
             let b_len2 = (b.0 as f32 - center.0) * (b.0 as f32 - center.0) + (b.1 as f32 - center.1) * (b.1 as f32 - center.1);
             a_len2.partial_cmp(&b_len2).unwrap().reverse()
-            //a_len2.cmp(&b_len2).reverse()
         });
+        */
 
         CloningImage {
             bg_mat,
