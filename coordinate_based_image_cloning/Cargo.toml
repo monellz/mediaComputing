@@ -1,3 +1,5 @@
+cargo-features = ["profile-overrides"]
+
 [package]
 name = "coordinate_based_image_cloning"
 version = "0.1.0"
@@ -5,6 +7,7 @@ authors = ["monell <monell.zhong@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+linear = {path = "./../linear"}
 clap = "2.33.0"
 image = "*"
 num-traits = "0.2.8"

@@ -1,10 +1,18 @@
 use crate::*;
+use crate::lib::uniq_refs;
+use std::collections::BTreeSet;
+use rayon::prelude::*;
 
+pub fn process(mut bg_mat: RgbMatrix, fg_mat: RgbMatrix, fg_mask_mat: MaskMatrix, offset: (usize, usize), para_type: ParallelType) -> RgbMatrix {
+    let (fg_mask_idx, fg_bound_idx, fg_bound_color) = setup_for_processing(&bg_mat, &fg_mat, &fg_mask_mat, &offset);
 
-pub fn process(mut img: CloningImage) -> CloningImage {
-    let normalize = |x: f64| {
-        if x > 1.0 { return 1.0f64; }
-        else if x < 0.0 { return 0.0f64; }
+    let normalize = |mut x: Rgb| {
+        if x[0] > 1.0 { x[0] = 1.0; }
+        else if x[0] < 0.0 { x[0] = 0.0; }
+        if x[1] > 1.0 { x[1] = 1.0; }
+        else if x[1] < 0.0 { x[1] = 0.0; }
+        if x[2] > 1.0 { x[2] = 1.0; }
+        else if x[2] < 0.0 { x[2] = 0.0; }
         x
     };
     let dis2 = |a: (usize, usize), b: (usize, usize)| {
@@ -25,162 +33,166 @@ pub fn process(mut img: CloningImage) -> CloningImage {
         ((1.0 - cos) / (1.0 + cos)).sqrt()
     };
 
-    (0..img.fg_mask_idx.len()).for_each(|i| {
-        if i % 500 == 0 {
-            info!("pixel {}/{}", i, img.fg_mask_idx.len());
+    match para_type {
+        ParallelType::Naive => {
+            info!("calculate for masked pixel, total num: {}", fg_mask_idx.len());
+            fg_mask_idx.iter().enumerate().for_each(|(i, &local)| {
+                if i % 1000 == 0 { info!("pixel {}/{}", i, fg_mask_idx.len()); }
+                //compute the mean-value coordinates
+                let mut mvc = Vec::<f64>::with_capacity(fg_bound_idx.len());
+                let mut sum: f64 = 0.0;
+                fg_bound_idx.iter().enumerate().for_each(|(b, &cur)| {
+                    let prev = if b == 0 { fg_bound_idx[fg_bound_idx.len() - 1] } else { fg_bound_idx[b - 1] };
+                    let next = if b == fg_bound_idx.len() - 1 { fg_bound_idx[0] } else { fg_bound_idx[b + 1] };
+
+                    let w = (half_tan(prev, local, cur) + half_tan(cur, local, next)) / dis2(cur, local).sqrt();
+
+                    sum += w;
+                    mvc.push(w);
+                });
+
+                mvc.iter_mut().for_each(|v| {
+                    *v /= sum;
+                });
+
+
+                //evaluate the mean-value interpolant 
+                let rgb = mvc.iter().enumerate().fold(Rgb::from_raw([0.0, 0.0, 0.0]), |acc, (i, &v)| acc + fg_bound_color[i] * v);
+                let global = (local.0 + offset.0, local.1 + offset.1);
+                bg_mat[global] = normalize(rgb + fg_mat[local]);
+            });
+        },
+
+        ParallelType::Thread => {
+            info!("prepare for thread parallel");
+            let mut masked_pixel: Vec<_> = {
+                let mut idx = BTreeSet::new();
+                fg_mask_idx.iter().for_each(|&local| {
+                    let e = (local.0 + offset.0) * bg_mat.ncol + local.1 + offset.1;
+                    idx.insert(e);
+                });
+                uniq_refs(&mut bg_mat.rgb, &idx).collect()
+            };
+
+            info!("calculate for masked pixel with threads, total num: {}", fg_mask_idx.len());
+            masked_pixel.par_iter_mut().enumerate().for_each(|(i, masked_pixel)| {
+                let local = fg_mask_idx[i];
+                //compute the mean-value coordinates
+                let mut mvc = Vec::<f64>::with_capacity(fg_bound_idx.len());
+                let mut sum: f64 = 0.0;
+                fg_bound_idx.iter().enumerate().for_each(|(b, &cur)| {
+                    let prev = if b == 0 { fg_bound_idx[fg_bound_idx.len() - 1] } else { fg_bound_idx[b - 1] };
+                    let next = if b == fg_bound_idx.len() - 1 { fg_bound_idx[0] } else { fg_bound_idx[b + 1] };
+
+                    let w = (half_tan(prev, local, cur) + half_tan(cur, local, next)) / dis2(cur, local).sqrt();
+
+                    sum += w;
+                    mvc.push(w);
+                });
+
+                mvc.iter_mut().for_each(|v| {
+                    *v /= sum;
+                });
+
+                //evaluate the mean-value interpolant 
+                let rgb = mvc.iter().enumerate().fold(Rgb::from_raw([0.0, 0.0, 0.0]), |acc, (i, &v)| acc + fg_bound_color[i] * v);
+                **masked_pixel = normalize(rgb + fg_mat[local]);
+            });
+
+
         }
-        let local_i = img.fg_mask_idx[i];
-        //compute the mean-value coordinates
-        let mut mvc = Vec::<f64>::with_capacity(img.fg_bound.len());
-        let mut sum: f64 = 0.0;
-        img.fg_bound.iter().enumerate().for_each(|(b, &cur)| {
-            let prev = if b == 0 { img.fg_bound[img.fg_bound.len() - 1] } else { img.fg_bound[b - 1] };
-            let next = if b == img.fg_bound.len() - 1 { img.fg_bound[0] } else { img.fg_bound[b + 1] };
+    };
 
-            let w = (half_tan((prev.0, prev.1), local_i, (cur.0, cur.1)) + half_tan((cur.0, cur.1), local_i, (next.0, next.1))) / dis2((cur.0, cur.1), local_i).sqrt();
+    info!("calculated");
 
-            sum += w;
-            mvc.push(w);
-        });
-
-        mvc.iter_mut().for_each(|v| {
-            *v /= sum;
-        });
-
-
-        //evaluate the mean-value interpolant 
-        let mut r: [f64; 3] = [0.0, 0.0, 0.0];
-        r[0] = mvc.iter().enumerate().fold(0.0, |acc, (i, &v)| acc + v * img.fg_bound[i].2);
-        r[1] = mvc.iter().enumerate().fold(0.0, |acc, (i, &v)| acc + v * img.fg_bound[i].3);
-        r[2] = mvc.iter().enumerate().fold(0.0, |acc, (i, &v)| acc + v * img.fg_bound[i].4);
-
-        let global_i =  img.bg_mask_idx[i];
-        img.bg_mat[(0, global_i.0, global_i.1)] = normalize(r[0] + img.fg_mat[(0, local_i.0, local_i.1)]); 
-        img.bg_mat[(1, global_i.0, global_i.1)] = normalize(r[1] + img.fg_mat[(1, local_i.0, local_i.1)]); 
-        img.bg_mat[(2, global_i.0, global_i.1)] = normalize(r[2] + img.fg_mat[(2, local_i.0, local_i.1)]); 
-
-    });
-
-    img
+    bg_mat
 }
 
+fn setup_for_processing(bg_mat: &RgbMatrix, fg_mat: &RgbMatrix, fg_mask_mat: &MaskMatrix, offset: &(usize, usize))
+    -> (Vec<(usize, usize)>, Vec<(usize, usize)>, Vec<Rgb>) {
 
-pub struct CloningImage {
-    pub bg_mat:     RgbMatrix,
-    fg_mat:         RgbMatrix,
-    fg_mask_idx:    Vec<(usize, usize)>,
-    bg_mask_idx:    Vec<(usize, usize)>,
-    //(x, y, r, g, b)
-    fg_bound:       Vec<(usize, usize, f64, f64, f64)>
-}
+    assert!(fg_mat.nrow == fg_mask_mat.nrow && fg_mat.ncol == fg_mask_mat.ncol, "mask and forground should be of the same size");
 
-impl CloningImage {
-    pub fn from_mat(bg_mat: RgbMatrix, fg_mat: RgbMatrix, fg_mask_mat: MaskMatrix, offset: (usize, usize)) -> CloningImage {
-        assert!(fg_mat.nrow == fg_mask_mat.nrow && fg_mat.ncol == fg_mask_mat.ncol, "mask and forground should be of the same size");
+    info!("set up for processing");
 
-        let mut fg_mask_idx: Vec<(usize, usize)> = vec![];
-        let mut bg_mask_idx: Vec<(usize, usize)> = vec![];
+    let mut fg_mask_idx: Vec<(usize, usize)> = vec![];
 
-        let mut fg_bound: Vec<(usize, usize, f64, f64, f64)> = vec![];
+    let mut fg_bound_idx: Vec<(usize, usize)> = vec![];
+    let mut fg_bound_color: Vec<Rgb> = vec![];
 
-        let dx = [0, 1, 0, -1];
-        let dy = [-1, 0, 1, 0];
+    let dx = [0, 1, 0, -1];
+    let dy = [-1, 0, 1, 0];
 
-        let mut boundary_map: Vec<Option<(f64, f64, f64)>> = vec![];
+    let mut boundary_map: Vec<Option<Rgb>> = vec![];
 
-        //top point
-        let mut init_boundary_pt = (fg_mask_mat.nrow, fg_mask_mat.ncol);
+    //top point
+    let mut init_boundary_pt = (fg_mask_mat.nrow, fg_mask_mat.ncol);
 
-        let mut boundary_cnt = 0 as usize;
+    let mut boundary_cnt = 0 as usize;
 
-        for i in 0..fg_mask_mat.elem.len() {
-            let local = (i / fg_mask_mat.ncol, i % fg_mask_mat.ncol);
-            boundary_map.push(None);
-            match fg_mask_mat.elem[i] {
-                Some(_) => {
-                    bg_mask_idx.push((local.0 + offset.0, local.1 + offset.1));
-                    fg_mask_idx.push(local);
-                },
-                None => {
-                    //check for boundary
-                    for j in 0..4 {
-                        let local_nbh = (dx[j] + local.0 as i32, dy[j] + local.1 as i32);
-                        if local_nbh.0 >= 0 && local_nbh.0 < fg_mat.nrow as i32 && local_nbh.1 >= 0 && local_nbh.1 < fg_mat.ncol as i32 {
-                            //nbh is in foreground
-                            let local_nbh = (local_nbh.0 as usize, local_nbh.1 as usize);
-                            if let Some(_) = fg_mask_mat[local_nbh] {
-                                //local is in boundary
-                                if local.0 < init_boundary_pt.0 { init_boundary_pt = local; }
-                                boundary_cnt += 1;
+    for i in 0..fg_mask_mat.elem.len() {
+        let local = (i / fg_mask_mat.ncol, i % fg_mask_mat.ncol);
+        boundary_map.push(None);
+        match fg_mask_mat.elem[i] {
+            Some(_) => {
+                fg_mask_idx.push(local);
+            },
+            None => {
+                //check for boundary
+                for j in 0..4 {
+                    let local_nbh = (dx[j] + local.0 as i32, dy[j] + local.1 as i32);
+                    if local_nbh.0 >= 0 && local_nbh.0 < fg_mat.nrow as i32 && local_nbh.1 >= 0 && local_nbh.1 < fg_mat.ncol as i32 {
+                        //nbh is in foreground
+                        let local_nbh = (local_nbh.0 as usize, local_nbh.1 as usize);
+                        if let Some(_) = fg_mask_mat[local_nbh] {
+                            //local is in boundary
+                            if local.0 < init_boundary_pt.0 { init_boundary_pt = local; }
+                            boundary_cnt += 1;
 
-                                let global = (offset.0 + local.0, offset.1 + local.1);
-                                let r = bg_mat[(0, global.0, global.1)] - fg_mat[(0, local.0, local.1)];
-                                let g = bg_mat[(1, global.0, global.1)] - fg_mat[(1, local.0, local.1)];
-                                let b = bg_mat[(2, global.0, global.1)] - fg_mat[(2, local.0, local.1)];
+                            let global = (offset.0 + local.0, offset.1 + local.1);
 
-                                *boundary_map.last_mut().unwrap() = Some((r, g, b));
+                            *boundary_map.last_mut().unwrap() = Some(bg_mat[global] - fg_mat[local]);
 
-                                break;
-                            }
+                            break;
                         }
                     }
                 }
-            };
-        }
-
-        println!("bondary cnt = {}", boundary_cnt);
-
-        let (r, g, b) = match boundary_map[init_boundary_pt.0 * fg_mask_mat.ncol + init_boundary_pt.1] {
-            Some((r, g, b)) => (r, g, b),
-            None => unreachable!()
+            }
         };
-        fg_bound.push((init_boundary_pt.0, init_boundary_pt.1, r, g, b));
+    }
 
-        let dx = [0, 1, 1, 1, 0, -1, -1, -1];
-        let dy = [-1, -1, 0, 1, 1, 1, 0, -1];
+    info!("bondary pixel num = {}", boundary_cnt);
 
+    let rgb = match boundary_map[init_boundary_pt.0 * fg_mask_mat.ncol + init_boundary_pt.1] {
+        Some(rgb) => rgb,
+        None => unreachable!()
+    };
+    fg_bound_idx.push(init_boundary_pt);
+    fg_bound_color.push(rgb);
 
-        loop {
-            let mut over = true;
-            for i in 0..8 {
-                let nbh = (init_boundary_pt.0 as i32 + dx[i], init_boundary_pt.1 as i32 + dy[i]);
-                if nbh.0 >= 0 && nbh.0 < fg_mask_mat.nrow as i32 && nbh.1 >= 0 && nbh.1 < fg_mask_mat.ncol as i32 {
-                    let nbh = (nbh.0 as usize, nbh.1 as usize);
-                    if let Some((r, g, b)) = boundary_map[nbh.0 * fg_mask_mat.ncol + nbh.1] {
-                        fg_bound.push((nbh.0, nbh.1, r, g, b));
-                        boundary_map[init_boundary_pt.0 * fg_mask_mat.ncol + init_boundary_pt.1] = None;
-                        init_boundary_pt = nbh;
-                        over = false;
-                        break;
-                    }
+    let dx = [0, 1, 1, 1, 0, -1, -1, -1];
+    let dy = [-1, -1, 0, 1, 1, 1, 0, -1];
+
+    loop {
+        let mut over = true;
+        for i in 0..8 {
+            let nbh = (init_boundary_pt.0 as i32 + dx[i], init_boundary_pt.1 as i32 + dy[i]);
+            if nbh.0 >= 0 && nbh.0 < fg_mask_mat.nrow as i32 && nbh.1 >= 0 && nbh.1 < fg_mask_mat.ncol as i32 {
+                let nbh = (nbh.0 as usize, nbh.1 as usize);
+                if let Some(rgb) = boundary_map[nbh.0 * fg_mask_mat.ncol + nbh.1] {
+                    fg_bound_idx.push(nbh);
+                    fg_bound_color.push(rgb);
+                    boundary_map[init_boundary_pt.0 * fg_mask_mat.ncol + init_boundary_pt.1] = None;
+                    init_boundary_pt = nbh;
+                    over = false;
+                    break;
                 }
             }
-            if over { break; }
         }
-
-        assert_eq!(boundary_cnt, fg_bound.len());
-
-        /*
-        let center = (center.0 as f32 / fg_bound.len() as f32, center.1 as f32 / fg_bound.len() as f32);
-        fg_bound.sort_by(|a, b| {
-            if a.0 == 0 && b.0 == 0 { return (a.1).cmp(&b.1).reverse(); }
-
-            let det = (a.0 as f32 - center.0) * (b.1 as f32 - center.1) - (b.0 as f32 - center.0) * (a.1 as f32 - center.1);
-            if det < 0.0 { return std::cmp::Ordering::Less; }
-            else if det > 0.0 { return std::cmp::Ordering::Greater; }
-
-            let a_len2 = (a.0 as f32 - center.0) * (a.0 as f32 - center.0) + (a.1 as f32 - center.1) * (a.1 as f32 - center.1);
-            let b_len2 = (b.0 as f32 - center.0) * (b.0 as f32 - center.0) + (b.1 as f32 - center.1) * (b.1 as f32 - center.1);
-            a_len2.partial_cmp(&b_len2).unwrap().reverse()
-        });
-        */
-
-        CloningImage {
-            bg_mat,
-            fg_mat,
-            fg_mask_idx,
-            bg_mask_idx,
-            fg_bound
-        }
+        if over { break; }
     }
+
+    assert_eq!(boundary_cnt, fg_bound_idx.len());
+
+    (fg_mask_idx, fg_bound_idx, fg_bound_color)
 }

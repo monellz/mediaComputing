@@ -49,6 +49,13 @@ fn main() {
                         .value_name("OUTPUT_PATH")
                         .takes_value(true)
                         .default_value("cloned.png"))
+                    .arg(Arg::with_name("parallel_type")
+                        .short("parallel_type")
+                        .long("parallel_type")
+                        .value_name("PARALLEL_TYPE")
+                        .takes_value(true)
+                        .default_value("thread")
+                        .possible_values(&["naive", "thread"]))
                     .get_matches();
 
     let bg = matches.value_of("background").unwrap();
@@ -57,6 +64,14 @@ fn main() {
     let x_offset: usize = matches.value_of("x_offset").unwrap().parse().unwrap();
     let y_offset: usize = matches.value_of("y_offset").unwrap().parse().unwrap();
     let output = matches.value_of("output").unwrap();
+    let parallel_type = match matches.value_of("parallel_type").unwrap() {
+        "naive" => ParallelType::Naive,
+        "thread" => ParallelType::Thread,
+        _ => {
+            warn!("unexpected parallel type, set default naive");
+            ParallelType::Naive
+        }
+    };
 
     let bg = image::open(bg).unwrap().to_rgb();
     let bg_h = bg.height() as usize;
@@ -72,9 +87,9 @@ fn main() {
     let fg_mat = RgbMatrix::from_raw_vec(fg.into_raw(), fg_h, fg_w);
     let fg_mask_mat = MaskMatrix::from_raw_vec(mask.into_raw(), mask_h, mask_w);
 
-    let init_img = cloning::CloningImage::from_mat(bg_mat, fg_mat, fg_mask_mat, (x_offset, y_offset));
+    //let init_img = cloning::CloningImage::from_mat(bg_mat, fg_mat, fg_mask_mat, (x_offset, y_offset));
+    //let modified_img = cloning::process(init_img);
+    let modified_img = cloning::process(bg_mat, fg_mat, fg_mask_mat, (x_offset, y_offset), parallel_type);
 
-    let modified_img = cloning::process(init_img);
-
-    modified_img.bg_mat.save_img(output);
+    modified_img.save_img(output);
 }

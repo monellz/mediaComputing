@@ -6,8 +6,9 @@ Rust implementation of Coordinates for Instant Image Cloning
 
 ## Toolchain
 
-* stable-x86_64-unknown-linux-gnu
-* rustc 1.38.0 (625451e37 2019-09-23)
+* rustc 1.40.0-nightly (e413dc36a 2019-10-14)
+
+    nightly-x86_64-unknown-linux-gnu 
 
 ## Usage
 
@@ -26,6 +27,7 @@ OPTIONS:
     -f, --foreground <FOREGROUND_IMAGE>    
     -m, --mask <MASK>                      foreground and mask should be of the same size
     -o, --output <OUTPUT_PATH>              [default: cloned.png]
+    -p, --parallel_type <PARALLEL_TYPE>     [default: thread]  [possible values: naive, thread]
     -x, --x_offset <X_OFFSET>               [default: 0]
     -y, --y_offset <Y_OFFSET>               [default: 0]
 ```
