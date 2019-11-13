@@ -10,6 +10,10 @@ Rust implementation of Coordinates for Instant Image Cloning
 
     nightly-x86_64-unknown-linux-gnu 
 
+## Requirements
+
+* At least CUDA version 8 to be installed
+
 ## Usage
 
 ```bash
@@ -32,13 +36,19 @@ OPTIONS:
     -y, --y_offset <Y_OFFSET>               [default: 0]
 ```
 
+* Before using GPU, set the ```CUDA_LIBRARY_PATH```environment variable to the location of your CUDA libs
+
+    for Ubuntu users, use  ```LIBRARY_PATH``` instead of ```CUDA_LIBRARY_PATH```
+
+    ```bash
+    export LIBRARY_PATH="/usr/local/cuda/lib64"
+    ```
+
 ## Performance
 
 | #cloned pixels | #boundary pixels | No parallel | Thread | GPU  |
 | -------------- | ---------------- | ----------- | ------ | ---- |
 |                |                  |             |        |      |
-
-
 
 ## Result
 
