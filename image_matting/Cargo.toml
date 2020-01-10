@@ -16,9 +16,6 @@ edition = "2018"
 [dependencies]
 clap = "2.33.0"
 image = "*"
-sprs = "0.6.5"
-sprs-ldl = "0.4.1"
-nalgebra = { version = "0.18.0", features = ["sparse"] }
 num-traits = "0.2.8"
 rayon = "1.2.0"
 log = "0.4.8"

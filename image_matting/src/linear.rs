@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub type Matrix = DMatrix<f64>;
 #[derive(Debug, Clone)]
 pub struct DMatrix<T> {
@@ -358,8 +359,6 @@ matrix_reduce_op!{V3, f64, 0.0}
 
 #[allow(dead_code)]
 pub mod sparse {
-    use super::*;
-
     use num_traits;
     use rayon::prelude::*;
 
@@ -500,7 +499,7 @@ pub mod sparse {
             let mut r = self.mult_vec_parallel(&x);
             r.par_iter_mut().enumerate().for_each(|(i, x)| *x = rhs[i] - *x);
 
-            let norm = |v: &Vec<T>| v.par_iter().cloned().reduce(|| T::zero(), |acc, x| acc + x * x);
+            //let norm = |v: &Vec<T>| v.par_iter().cloned().reduce(|| T::zero(), |acc, x| acc + x * x);
             let dot = |a: &Vec<T>, b: &Vec<T>| a.par_iter().cloned().zip(b).fold(|| T::zero(), |acc, (x, &y)| acc + x * y).sum();
 
             let mut d = cond_rev.mult_vec_parallel(&r);

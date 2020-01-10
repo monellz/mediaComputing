@@ -2,6 +2,7 @@ mod lib;
 
 use lib::*;
 
+use stopwatch::{Stopwatch};
 use clap::{Arg, App};
 use image;
 
@@ -12,6 +13,7 @@ use simplelog::*;
 
 
 fn main() {
+    let sw = Stopwatch::start_new();
     TermLogger::init(LevelFilter::Info, Config::default(), TerminalMode::Mixed).unwrap();
     let matches = App::new("poisson image editing")
                     .arg(Arg::with_name("background")
@@ -90,4 +92,5 @@ fn main() {
     let modified_img = possion::process(init_img);
 
     modified_img.bg_mat.save_img(output);
+    info!("total time is {} ms", sw.elapsed_ms());
 }

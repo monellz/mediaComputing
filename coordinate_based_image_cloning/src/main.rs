@@ -1,6 +1,8 @@
 use clap::{Arg, App};
 use image;
 
+use stopwatch::{Stopwatch};
+
 #[macro_use]
 extern crate log;
 extern crate simplelog;
@@ -15,6 +17,7 @@ mod cloning;
 
 
 fn main() {
+    let sw = Stopwatch::start_new();
     TermLogger::init(LevelFilter::Info, Config::default(), TerminalMode::Mixed).unwrap();
     let matches = App::new("coordinate-based image cloning")
                     .arg(Arg::with_name("background")
@@ -95,4 +98,5 @@ fn main() {
     let modified_img = cloning::process(bg_mat, fg_mat, fg_mask_mat, (x_offset, y_offset), parallel_type);
 
     modified_img.save_img(output);
+    info!("total time is {} ms", sw.elapsed_ms());
 }

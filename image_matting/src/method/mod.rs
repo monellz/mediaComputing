@@ -4,14 +4,13 @@ pub const WIN_LEN: usize = 3;
 pub const WIN_SIZE: usize = WIN_LEN * WIN_LEN;
 
 
-use crate::linear::{self, sparse};
+use crate::linear;
 use linear::{M33, V3};
 use crate::{matrix_able_ops_for_whole, matrix_math_ops_for_single_elem, matrix_double_idx};
 
-use std::io::Write;
-
 use image;
 use image::ImageBuffer;
+use image::RgbaImage;
 
 pub type Rgb = V3;
 pub type RgbMatrix = linear::DMatrix<Rgb>;
@@ -44,7 +43,19 @@ impl RgbMatrix {
         RgbMatrix::from_vec(elem, nrow, ncol)
     }
 
-    fn from_gray_vec(raw: Vec<f64>, nrow: usize, ncol: usize) -> RgbMatrix {
+    pub fn from_rgba_raw_vec(raw: Vec<u8>, nrow: usize, ncol: usize) -> RgbMatrix {
+        let elem = (0..raw.len()).step_by(4).map(|i| {
+            let mut c = Rgb::new();
+            c[0] = raw[i] as f64 / 255.0;
+            c[1] = raw[i + 1] as f64 / 255.0;
+            c[2] = raw[i + 2] as f64 / 255.0;
+            c
+        }).collect();
+
+        RgbMatrix::from_vec(elem, nrow, ncol)
+    }
+
+    pub fn from_gray_vec(raw: Vec<f64>, nrow: usize, ncol: usize) -> RgbMatrix {
         let elem = raw.iter().map(|&x| {
             let mut c = Rgb::new();
             c[0] = x;
@@ -69,7 +80,7 @@ impl RgbMatrix {
         RgbMatrix::from_vec(elem, nrow, ncol)
     }
 
-    fn save_img(&self, fname: &str) {
+    pub fn save_img(&self, fname: &str) {
         info!("save img to {}", fname);
 
         let mut image = ImageBuffer::<image::Rgb<u8>, Vec<_>>::new(self.ncol() as u32, self.nrow() as u32);
@@ -178,35 +189,6 @@ impl<'a> WindowRef<'a> {
         }
     }
 
-    fn reduce(&self, map: &mut ItemMap) {
-        for i in 0..WIN_SIZE {
-            for j in 0..WIN_SIZE {
-                let g_i = self.get_global_elem_idx(i);
-                assert_eq!(g_i, self.global_idx[i]);
-                let g_j = self.get_global_elem_idx(j);
-                assert_eq!(g_j, self.global_idx[j]);
-
-                /*
-                if g_i <= g_j {
-                    let mut v = self.inner_mat[(i, j)];
-                    match map.get(&(g_i, g_j)) {
-                        Some(x) => v += *x,
-                        None => {},
-                    };
-                    map.insert((g_i, g_j), v);
-                }
-                */
-                let mut v = self.inner_mat[(i, j)];
-
-                match map.get(&(g_i, g_j)) {
-                    Some(x) => v += *x,
-                    None => {},
-                };
-                map.insert((g_i, g_j), v);
-            }
-        }
-    }
-
     fn get_global_elem_idx(&self, local_idx: usize) -> usize {
         let r = local_idx / WIN_LEN;
         let c = local_idx % WIN_LEN;
@@ -242,10 +224,6 @@ impl<'a> WinRefMatrix<'a> {
         self.elem.iter_mut().for_each(|x| x.calculate_inner_mat(eps));
     }
 
-    fn all_reduce(&mut self, map: &mut ItemMap) {
-        self.elem.iter().for_each(|x| x.reduce(map));
-    }
-
     fn create_tri_inds(&self) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
         let mut rows: Vec<usize> = Vec::with_capacity(WIN_SIZE * self.ncol * self.nrow);
         let mut cols: Vec<usize> = Vec::with_capacity(WIN_SIZE * self.ncol * self.nrow);
@@ -275,3 +253,15 @@ impl<'a> WinRefMatrix<'a> {
         (rows, cols, data)
     }
 }
+
+pub fn vec_to_rgba(vec: std::vec::Vec<f64>, h: usize, w: usize) -> RgbaImage {
+    let mut image = ImageBuffer::<image::Rgba<u8>, Vec<_>>::new(w as u32, h as u32);
+    for i in 0..w {
+        for j in 0..h {
+            //*image.get_pixel_mut(i as u32, j as u32) = image::Rgba([res[0] as u8, res[1] as u8, res[2] as u8, 0]);
+            let res = vec[j * w + i] * 255.0;
+            *image.get_pixel_mut(i as u32, j as u32) = image::Rgba([res as u8, res as u8, res as u8, 255]);
+        }
+    }
+    image
+} 
